@@ -220,3 +220,14 @@ def test_profile_data_isolation(client):
     c.post('/api/auth/logout')
     c.post('/api/auth/login',json={'profile_code':code_b,'pin':'654321'})
     assert c.get('/api/medications').json()==[]
+
+def test_postgres_url_normalizes_to_installed_psycopg3_driver():
+    from app.database import make_database
+
+    for raw_url in (
+        "postgres://user:pass@localhost:5432/mitracare",
+        "postgresql://user:pass@localhost:5432/mitracare",
+    ):
+        engine, _ = make_database(raw_url)
+        assert engine.url.drivername == "postgresql+psycopg"
+        engine.dispose()
