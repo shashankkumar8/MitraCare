@@ -1,174 +1,447 @@
-# MitraCare — shared care, made calmer
+# MitraCare
 
-**Catalyst — Solo AI Hackathon | Challenge: Elderly Care & Medication Management Platform**
+### Patient-first elderly-care coordination · Medication routines · Shared family visibility
 
-MitraCare is a patient-first shared care space for medication routines, dose check-ins, doctor appointments, and trusted family/caregiver coordination. It is built around a real workflow rather than a chatbot wrapper: one patient-controlled profile, individually authenticated members, a deterministic reminder state machine, deduplicated alert delivery, and a traceable activity log.
+[![CI](https://github.com/shashankkumar8/MitraCare/actions/workflows/tests.yml/badge.svg)](https://github.com/shashankkumar8/MitraCare/actions/workflows/tests.yml)
+[![Live demo](https://img.shields.io/badge/Live%20Demo-Render-2E6D4B)](https://mitracare-api-shashank-k8r3-cfr0.onrender.com)
+[![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-4169E1)](https://www.postgresql.org/)
 
-> **Safety boundary:** MitraCare is a coordination and record-keeping prototype. It does not diagnose, prescribe, calculate doses, interpret drug labels, check interactions, determine whether a missed dose should be taken, or replace a clinician/pharmacist. Medication information must be entered from a current clinician-verified prescription. Never double a dose because of an app notification.
+**Shared care. Safer routines. The patient stays in control.**
 
-## The product in one minute
+MitraCare is a shared medication and appointment workspace for older adults and the people they trust. It connects a patient, invited caregivers and family members around one care profile—with individual sign-in, role-specific permissions, medication schedules, dose check-ins, appointment planning, reminder history and an attributed activity record.
 
-A patient creates a care profile and PIN, then invites a caregiver or family member with a one-time code. The invited person creates their own PIN. The patient and caregivers can manage verified schedules, record a dose as taken or skipped, and add appointments. Family members can see the shared plan but cannot change it. Every important change is attributed to a member in the activity log.
+It is designed around a practical care workflow, not a chatbot: the schedule is explicit, reminder transitions are deterministic, repeated notifications are deduplicated, and every recorded action has an identifiable member behind it.
 
-CareLoop creates dose events in the patient's timezone and tracks them through explicit states:
+> **Product principle:** technology should make it easier for an older adult to coordinate care—not quietly take decisions away from them.
 
-```text
-scheduled → due → taken
-                  ├→ skipped
-                  └→ missed check-in (after a 60-minute grace window)
-```
+---
 
-A reminder is queued 15 minutes before a scheduled dose. If no check-in is recorded within the 60-minute grace window, the event is marked as a missed check-in and a follow-up is queued. Appointment reminders are queued 24 hours and 1 hour before the visit. Each reminder has a database-enforced unique key, preventing repeated page refreshes or worker cycles from sending the same alert repeatedly. Email delivery gets up to three total attempts (the initial attempt plus two retries); delivery failures remain visible in the reminder history.
+## Live application
 
-**CareLoop Insight** is a deliberately explainable, non-clinical routine signal. It looks for time-of-day periods where a sufficient number of check-ins were repeatedly not marked taken, shows the exact sample/window/threshold, and suggests a human conversation about reminder friction. It does not predict illness or recommend treatment. With too little data it explicitly says so.
-
-## What is implemented
-
-| Challenge requirement | MitraCare implementation |
+| Resource | Link |
 |---|---|
-| Shared healthcare profile | Patient-owned care profile with timezone and a unique profile code |
-| Passcode-based access | 6–8 digit personal PIN; per-member sessions; invitation codes hashed at rest, single-use and 24-hour expiry |
-| Patient/caregiver/family roles | Patient controls invitations; caregiver can manage; family is read-only |
-| Add/edit/manage medication routine | Add, edit and pause a verified schedule, route, strength, instructions, prescriber, dates, and up to eight daily times |
-| Adherence tracking | Event-level taken/skipped/missed check-ins; 7-day descriptive snapshot (blank until a check-in is recorded) |
-| Appointment management | Add clinician, date/time, location and preparation notes |
-| Proactive reminders | 15-minute dose prompt, 60-minute missed-check-in escalation, 24-hour/1-hour appointment alerts |
-| Email reminders | SMTP delivery to member emails; persistent outbox, deduplication, retry and visible status; in-app-only mode when SMTP is absent |
-| Collaboration | Shared care circle, member-specific identity, role boundaries, activity audit |
-| Accessibility | Large readable controls, high contrast, keyboard focus, semantic labels, responsive layout, reduced-motion support |
-| Privacy/security | Scrypt PIN hashes, HTTP-only cookie sessions, hashed session tokens, account/IP login throttling, role checks, security headers, no third-party AI/data calls |
+| **MitraCare web app** | [Open the live application](https://mitracare-api-shashank-k8r3-cfr0.onrender.com) |
+| **API health** | [Check service health](https://mitracare-api-shashank-k8r3-cfr0.onrender.com/api/health) |
+| **Interactive API reference** | [Open Swagger UI](https://mitracare-api-shashank-k8r3-cfr0.onrender.com/docs) |
+| **Source repository** | [GitHub — shashankkumar8/MitraCare](https://github.com/shashankkumar8/MitraCare) |
+| **Automated checks** | [GitHub Actions](https://github.com/shashankkumar8/MitraCare/actions) |
 
-## Stack
+**Hosted environment:** Render web service in Singapore, backed by managed PostgreSQL 18. The service is configured for HTTPS cookies and has been verified live with successful application-root and API health responses.
 
-- **Backend:** Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2
-- **Database:** SQLite for local evaluation; PostgreSQL recommended for hosted use
-- **Frontend:** HTML, CSS, vanilla JavaScript (no build step, no React dependency, no placeholder screens)
-- **Reminder engine:** deterministic Python worker, database outbox, uniqueness constraints, SMTP with retries
-- **Deployment target:** Render web service + managed PostgreSQL (configured in `render.yaml`)
-- **Testing:** pytest + FastAPI TestClient + isolated in-memory SQLite databases
+**First visit:** the hosted environment does not contain shared demo credentials. Create a new patient profile from the welcome screen, then invite test caregiver/family members from the Care circle.
 
-No external generative model is used in the medication path. The highest-risk actions are deterministic and auditable by design. The product's intelligence is an explainable pattern signal; it is not marketed as clinical AI.
+**Deployment note:** this is a hackathon demonstration on Render's free tier. The web service may sleep after inactivity, and the current free PostgreSQL instance is scheduled to expire on **15 December 2026**. Do not enter real patient or sensitive health information.
 
-## Run locally (Windows / macOS / Linux)
+---
 
-Python 3.11 or newer is recommended.
+## Product at a glance
 
-```bash
-# 1. Extract the project and open the mitracare folder
-cd mitracare
+| Area | What MitraCare provides |
+|---|---|
+| **Patient profile** | A patient-owned care profile with a unique profile code and timezone |
+| **Shared access** | Separate PIN-based accounts for the patient, caregivers and family |
+| **Medication plan** | Add, edit and pause schedules transcribed from a current verified prescription |
+| **Dose check-ins** | Record taken or skipped events; overdue events become missed check-ins |
+| **Appointments** | Shared clinician, date, time, location and preparation notes |
+| **CareLoop reminders** | Upcoming dose, missed-check-in and appointment reminder events |
+| **Reminder history** | In-app notification records and visible email delivery states |
+| **CareLoop Insight** | Explainable time-of-day routine signals based on recorded check-ins |
+| **Activity log** | Recent member-attributed changes across the care profile |
 
-# 2. Create and activate a virtual environment
+### Why it is different
+
+Most reminder utilities stop at a notification. MitraCare connects the surrounding workflow:
+
+1. **A shared source of context:** the patient, caregiver and family see the same care plan through their own accounts.
+2. **A deterministic event engine:** medication schedules become dated dose events with explicit states and bounded reminder rules.
+3. **A patient-controlled care circle:** the patient chooses who joins and whether they receive caregiver or view-only family access.
+4. **An explainable signal, not a black box:** the routine insight shows its sample, time window and threshold. It does not diagnose or recommend treatment.
+5. **A traceable record:** medication changes, check-ins, invitations and appointments are attributed to a member in the activity history.
+
+---
+
+## Workspace modules
+
+The browser application is organized into six focused work areas.
+
+### 1. Overview
+
+A shared snapshot of the care routine: upcoming dose events, appointment schedule, descriptive adherence records, recent reminders and care-circle members. The adherence figure remains empty until there are recorded check-ins; it is not presented as proof that a medicine was physically taken.
+
+### 2. Medication plan
+
+Create, edit and pause medication schedules with:
+
+- Medication name, strength/form and route.
+- Instructions transcribed from the current prescription.
+- One or more scheduled times in 24-hour format (up to eight per day).
+- Start date, optional end date and prescriber/clinic.
+- A dated event for each scheduled dose in the patient's timezone.
+
+Editing a schedule supersedes future pending events that no longer match. Pausing a schedule preserves the historical record and supersedes future pending events rather than deleting the medication history.
+
+### 3. Appointments
+
+Add and view doctor or clinician appointments with date/time, location and optional preparation notes. Appointment times are stored in UTC and displayed in the patient's configured timezone.
+
+### 4. Care circle
+
+The patient controls invitations and access:
+
+| Role | Access |
+|---|---|
+| **Patient** | Owns the profile, invites members, manages the plan and records check-ins |
+| **Caregiver** | Can manage medication schedules and appointments and record check-ins |
+| **Family** | Can view the shared plan, appointments and activity; cannot mutate records |
+
+Invitations are single-use, expire after 24 hours and are stored as hashes. Each invited person creates an individual 6–8 digit PIN.
+
+### 5. Activity log
+
+A recent, member-attributed history of profile creation, invitations, medication changes, dose actions and appointment creation. The log helps the care circle understand what was recorded and by whom; it is an operational activity history, not a certified tamper-proof medical record.
+
+### 6. Reminder centre
+
+A consolidated view of reminder records, their type and current delivery state. It also makes the configured dose lead time, missed-check-in grace period and appointment lead times visible.
+
+---
+
+## CareLoop — deterministic reminder and check-in engine
+
+CareLoop converts a recurring medication schedule into dated events in the patient's timezone. The application worker checks profiles on a 60-second cycle and creates reminder records using unique deduplication keys.
+
+~~~mermaid
+flowchart TD
+    A["Verified medication schedule"] --> B["Materialize dated dose events"]
+    B --> C["Pending event in patient timezone"]
+    C --> D["Upcoming reminder: 15 minutes before"]
+    C --> E{"Check-in recorded?"}
+    E -->|"Taken"| F["Taken — attributed to member"]
+    E -->|"Skipped"| G["Skipped — attributed to member"]
+    E -->|"No check-in after 60 minutes"| H["Missed check-in"]
+    H --> I["Missed-check-in follow-up reminder"]
+    B --> J["Schedule edited or paused"]
+    J --> K["Obsolete future events superseded"]
+~~~
+
+### Reminder rules
+
+| Event | Rule |
+|---|---|
+| Upcoming medication | Queue a reminder approximately **15 minutes before** the scheduled time |
+| Missed check-in | After the **60-minute grace window**, mark the event missed and queue a follow-up |
+| Appointment | Queue reminders approximately **24 hours** and **1 hour** before the appointment |
+| Duplicate prevention | A unique notification key prevents repeated worker cycles from creating the same reminder again |
+| Email retry | SMTP failures are retried with a maximum of **three total attempts**; exhausted attempts are marked failed |
+
+A check-in can be recorded as **taken** or **skipped**. Once an event is recorded, a second action is rejected so the history is not silently overwritten. A “taken” status means a member recorded that status—it does not verify ingestion.
+
+### CareLoop Insight
+
+CareLoop Insight is a transparent, rules-based summary of check-in patterns over the last 14 days.
+
+- Events are grouped into morning, afternoon, evening and night.
+- A time-period signal is considered only when there are at least **four recorded events** in that period.
+- A signal appears when at least **40%** of those events were not marked taken.
+- The interface exposes the event count, window, threshold and suggested human follow-up.
+- When the sample is too small or the threshold is not met, the app says that no clear pattern is available.
+
+It is descriptive routine support—not a clinical prediction, adherence diagnosis or medication recommendation.
+
+---
+
+## System architecture
+
+~~~mermaid
+flowchart LR
+    subgraph People
+      P["Patient"]
+      C["Caregiver"]
+      F["Family"]
+    end
+    UI["Accessible browser UI"] --> API["FastAPI application"]
+    P --> UI
+    C --> UI
+    F --> UI
+    API --> AUTH["PIN sessions + role authorization"]
+    AUTH --> DB[("SQLite local / PostgreSQL hosted")]
+    API --> PLAN["Medication + appointment services"]
+    PLAN --> ENGINE["CareLoop event materializer"]
+    ENGINE --> OUTBOX["Deduplicated notification outbox"]
+    OUTBOX --> SMTP["Optional SMTP delivery"]
+    API --> AUDIT["Member-attributed activity log"]
+    API --> INSIGHT["Explainable routine signal"]
+    INSIGHT --> DB
+~~~
+
+### Key implementation decisions
+
+- **Timezone-aware scheduling:** local schedule times are converted to UTC event timestamps and rendered back in the patient's timezone.
+- **Explicit event records:** scheduled doses are persisted as individual events, protected by a uniqueness constraint on medication and scheduled time.
+- **Idempotent reminders:** notification deduplication is enforced in the database, not only in the browser.
+- **Patient-scoped data:** every care-plan query is filtered by the active profile.
+- **Human authority:** the application records schedules and check-ins; it does not decide what medicine a person should take.
+
+---
+
+## Security, privacy and accessibility
+
+### Access and session controls
+
+- Individual 6–8 digit PINs; PIN hashes use **scrypt**.
+- Random session tokens are stored as SHA-256 digests, not as raw tokens.
+- HTTP-only, SameSite=Strict session cookie; hosted deployment enables the Secure cookie flag.
+- Sessions expire after 12 hours.
+- Patient-created invitations are hashed, single-use and expire after 24 hours.
+- Failed login attempts are rate-limited; five failed attempts trigger a 10-minute lockout for the profile/IP key.
+- Role authorization and profile scoping are enforced by the API, not just hidden UI controls.
+- Security response headers are applied by the FastAPI middleware.
+
+### Accessible interaction
+
+- Large, readable form controls and clear action labels.
+- Keyboard-visible focus states and a skip-to-main-content link.
+- Responsive desktop and mobile navigation.
+- Reduced-motion support.
+- High-contrast status labels for upcoming, due, taken, skipped and missed events.
+
+The project has not undergone formal WCAG certification or an assistive-technology audit. Accessibility features are implemented, but certification is not claimed.
+
+---
+
+## Technology stack
+
+| Layer | Technology |
+|---|---|
+| Backend API | Python, FastAPI |
+| Validation | Pydantic v2 |
+| Persistence | SQLAlchemy 2 |
+| Hosted database | PostgreSQL 18 |
+| Local database | SQLite |
+| Frontend | HTML5, CSS, vanilla JavaScript |
+| Reminder delivery | In-process worker, database outbox, optional SMTP |
+| Tests | pytest, FastAPI TestClient, isolated SQLite fixtures |
+| CI | GitHub Actions |
+| Hosting | Render web service + managed PostgreSQL |
+
+**No generative-AI wrapper is used.** The medication and reminder path is deterministic Python logic. The routine insight is a small, inspectable rules-based aggregation; no external LLM or third-party AI API receives care-profile data.
+
+---
+
+## Run locally
+
+### Requirements
+
+- Python 3.11 or newer.
+- Git.
+- A modern browser.
+
+### 1. Clone the repository
+
+~~~bash
+git clone https://github.com/shashankkumar8/MitraCare.git
+cd MitraCare
+~~~
+
+### 2. Create a virtual environment
+
+**Windows PowerShell**
+
+~~~powershell
 python -m venv .venv
-# Windows PowerShell:
 .venv\Scripts\Activate.ps1
-# macOS/Linux:
-# source .venv/bin/activate
+~~~
 
-# 3. Install dependencies
+**macOS / Linux**
+
+~~~bash
+python3 -m venv .venv
+source .venv/bin/activate
+~~~
+
+### 3. Install dependencies
+
+~~~bash
 python -m pip install -r requirements.txt
+~~~
 
-# 4. Create the synthetic demo workspace (once)
+### 4. Seed the local synthetic demo
+
+~~~bash
 python -m app.seed_demo
+~~~
 
-# 5. Start the app
-# Windows PowerShell:
-$env:COOKIE_SECURE="false"
+### 5. Start the application
+
+**Windows PowerShell**
+
+~~~powershell
+$env:COOKIE_SECURE = "false"
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-# macOS/Linux:
-# COOKIE_SECURE=false python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
+~~~
 
-Open <http://127.0.0.1:8000>.
+**macOS / Linux**
 
-### Demo access (synthetic data only)
+~~~bash
+COOKIE_SECURE=false python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+~~~
+
+Open **http://127.0.0.1:8000**.
+
+### Local-only synthetic demo accounts
 
 | Role | Profile code | PIN |
 |---|---|---|
-| Patient | `MTDEMO26` | `246810` |
-| Caregiver | `MTDEMO26` | `135790` |
+| Patient | MTDEMO26 | 246810 |
+| Caregiver | MTDEMO26 | 135790 |
 
-The local synthetic demo (created only when you run `python -m app.seed_demo`) includes example medications and a clearly labelled demo appointment. It is not seeded on the public hosted service. These are not real prescriptions or a clinical schedule. You can create a new profile from the welcome screen.
+These credentials are created only by running the local seed command. They are **not present on the public hosted service**. The example schedules and appointment are synthetic and must never be treated as prescriptions or real bookings.
 
-## Configure real email delivery
+---
 
-Without SMTP configuration the app still records in-app reminders and explicitly displays that email is not connected. For actual email delivery, copy `.env.example` to `.env` and export the values in your terminal or configure them as service environment variables. Never commit secrets.
+## Test and quality checks
 
-Required variables:
+Run the backend suite and frontend syntax check:
 
-```text
-SMTP_HOST
-SMTP_PORT=587
-SMTP_USER
-SMTP_PASSWORD
-SMTP_FROM
-COOKIE_SECURE=true   # true on HTTPS deployment; false only for localhost HTTP
-DATABASE_URL         # optional locally; hosted app should use PostgreSQL
-```
-
-Each patient/caregiver/family member must provide their own email address when creating or joining the circle. Only then can alerts be delivered to that member. Use a transactional SMTP provider; do not put personal email passwords into the repository. Failed delivery gets up to three total attempts (initial attempt plus two retries) and is then shown as failed. The app must not be used as an emergency alert channel.
-
-## Test and verify
-
-```bash
+~~~bash
 pytest -q
 node --check static/app.js
-```
+~~~
 
-The included tests cover profile creation/login/logout, invalid PIN and timezone handling, login lockout, single-use caregiver/family invitations, role and cross-profile isolation, medication creation/edit/pause, pending-event supersession, dose check-ins and duplicate-action rejection, audit history, missed-check-in and upcoming-reminder idempotency, routine-insight sample thresholds, invalid schedule times, future appointment validation, frontend asset delivery, and mocked SMTP retry/dead-letter behavior.
+The current suite contains **18 tests** covering:
 
-**Last local verification in this build:** `17 passed` under pytest; `node --check static/app.js` completed without syntax errors. These are automated local tests with synthetic fixtures, not field trials with real older adults or live SMTP. Re-run them on your machine and test in a real browser before claiming deployment readiness.
+- Profile creation, login, logout, invalid PINs and timezone validation.
+- Login lockout and single-use invitation expiry/replay protection.
+- Patient, caregiver and read-only family permissions.
+- Cross-profile data isolation.
+- Medication creation, editing, pausing and superseding obsolete future events.
+- Taken/skipped check-ins and rejection of duplicate actions.
+- Upcoming and missed reminder idempotency.
+- Appointment validation.
+- CareLoop Insight minimum-sample behavior.
+- SMTP retry and dead-letter behavior using a mocked mail server.
+- PostgreSQL URL normalization to the installed psycopg 3 driver.
+- Frontend entry point and static asset delivery.
 
-## Live demo
+GitHub Actions runs pytest and the JavaScript syntax check on pushes and pull requests. Automated tests validate software behavior with synthetic fixtures; they are not clinical trials, field testing or proof of email deliverability.
 
-**Application:** https://mitracare-api-shashank-k8r3-cfr0.onrender.com
+---
 
-**API health:** https://mitracare-api-shashank-k8r3-cfr0.onrender.com/api/health
+## API surface
 
-**Interactive API docs:** https://mitracare-api-shashank-k8r3-cfr0.onrender.com/docs
+The complete interactive reference is available at **[Swagger UI](https://mitracare-api-shashank-k8r3-cfr0.onrender.com/docs)**.
 
-The application is deployed on Render in Singapore with a managed PostgreSQL 18 database. The deployment was verified as `live` and Render's `/api/health` health checks returned HTTP 200 after startup.
+| Group | Method | Endpoint | Purpose |
+|---|---|---|---|
+| Identity | POST | /api/profiles | Create patient profile and start a session |
+| Identity | POST | /api/auth/login | Sign in with profile code and PIN |
+| Identity | POST | /api/auth/join | Join with a single-use invitation |
+| Identity | POST | /api/auth/logout | Revoke current session |
+| Identity | GET | /api/me | Read current member and profile |
+| Care circle | POST | /api/invites | Patient creates a caregiver/family invite |
+| Care circle | GET | /api/members | List active care-circle members |
+| Medication | GET / POST | /api/medications | List or create medication schedules |
+| Medication | PUT | /api/medications/{med_id} | Update a schedule |
+| Medication | PATCH | /api/medications/{med_id}/deactivate | Pause a schedule |
+| Dose events | GET | /api/dashboard | Read dashboard, upcoming events and reminders |
+| Dose events | POST | /api/doses/{dose_id}/mark | Record a taken or skipped check-in |
+| Appointments | GET / POST | /api/appointments | List or create appointments |
+| Insights | GET | /api/insights | Read explainable routine signals |
+| Reminders | GET | /api/notifications | Read reminder history and delivery states |
+| Reminders | GET | /api/settings/reminders | Read reminder configuration |
+| Activity | GET | /api/activity | Read recent activity events |
+| System | GET | /api/health | Health probe |
 
-For the hosted instance, create a new patient profile from the welcome screen. The local synthetic demo accounts listed above are not seeded into the public service. Email delivery is not enabled until valid SMTP credentials and a verified sender are configured; in-app reminders remain available.
+---
 
-**Free-tier limitations:** the web service can spin down after inactivity, causing a cold-start delay. The free PostgreSQL database is scheduled to expire on **15 December 2026**. Do not use this temporary hackathon deployment for real patient or other sensitive health data; move to a paid persistent database, configure backups and secrets, and complete security and clinical validation before any real-world use.
+## Research-informed design
 
-## API overview
+MitraCare's product choices are informed by research on medication adherence and caregiver involvement. The evidence does **not** establish that this prototype improves adherence or clinical outcomes.
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/profiles` | Create patient profile and sign in |
-| POST | `/api/auth/login` | Sign in with profile code + personal PIN |
-| POST | `/api/auth/join` | Accept a single-use invite and set a personal PIN |
-| POST | `/api/auth/logout` | Revoke current session |
-| GET | `/api/me` | Current member/profile |
-| POST | `/api/invites` | Patient invites caregiver or family |
-| GET | `/api/members` | List active care-circle members |
-| POST / GET | `/api/medications` | Add/list medication schedules |
-| PUT | `/api/medications/{id}` | Edit a verified schedule and supersede obsolete pending events |
-| PATCH | `/api/medications/{id}/deactivate` | Pause a schedule without deleting history |
-| GET | `/api/dashboard` | Upcoming doses, appointments, adherence snapshot and reminders |
-| POST | `/api/doses/{id}/mark` | Record taken or skipped check-in (one transition only) |
-| POST / GET | `/api/appointments` | Add/list doctor appointments |
-| GET | `/api/insights` | Explainable, descriptive routine signals |
-| GET | `/api/activity` | Recent audit events |
-| GET | `/api/notifications` | Reminder/outbox history |
-| GET | `/api/settings/reminders` | Reminder configuration summary |
-| GET | `/api/health` | Health probe |
+| Research | Design implication |
+|---|---|
+| [Systematic review of medication-adherence strategies in older adults (2026)](https://pmc.ncbi.nlm.nih.gov/articles/PMC12911538/) | Medication support should be multi-component; reminder-only impact should not be overstated |
+| [Cochrane review CD012419 — older adults taking multiple medicines](https://www.cochrane.org/evidence/CD012419_interventions-helping-older-adults-prescribed-multiple-medications-use-and-take-their-medications) | Record check-ins descriptively and communicate uncertainty |
+| [Caregiver-based medication safety review (2018)](https://pubmed.ncbi.nlm.nih.gov/30136714/) | Include caregivers while preserving the older adult's control and explicit access boundaries |
+| [Medication reminder technologies review (2026)](https://pubmed.ncbi.nlm.nih.gov/41642177/) | Treat reminders as one part of a care workflow, not a guarantee of adherence or better outcomes |
 
-Interactive API documentation is available at `/docs` while the service is running.
+See [RESEARCH.md](RESEARCH.md) for the study details and the research-to-feature mapping.
 
-## Known limitations — stated honestly
+---
 
-- No real-world field testing with elderly participants has been conducted. The automated tests validate software behavior, not clinical safety or usability in the home.
-- Email delivery requires valid SMTP credentials, verified sender configuration and member email addresses. A queue record alone is not proof an email reached an inbox.
-- SQLite is for local evaluation only; use PostgreSQL for hosted use. This prototype uses `create_all`; production needs versioned migrations, backups and recovery tests.
-- The embedded reminder worker is suitable for a single-instance prototype. Production should use a separate durable scheduler/worker, distributed locking, monitoring and dead-letter handling.
-- There is no clinician/EMR integration, pharmacy integration, refill management, SMS/WhatsApp channel, offline sync, caregiver identity verification, or push notification support.
-- The app does not check drug-drug interactions, duplicate ingredients, contraindications, renal adjustments, missed-dose actions, or dosage correctness.
-- No regulatory, privacy, penetration, accessibility certification or clinical validation is claimed. Do not enter real health information into a public hackathon deployment.
+## Safety and operational boundaries
 
-## Submission positioning
+MitraCare is a **care coordination and record-keeping prototype**. It does not:
 
-**One-liner:** *MitraCare turns isolated medication reminders into a patient-controlled care loop: verified schedules, individual caregiver access, event-level check-ins and deduplicated escalation — with every change visible to the right people.*
+- Diagnose conditions, prescribe medicines or calculate doses.
+- Interpret prescriptions, check drug interactions or contraindications.
+- Recommend what to do after a missed or uncertain dose.
+- Verify that a medicine was physically taken, or that an email was read.
+- Connect to an EMR, pharmacy, hospital, insurer or live clinical system.
+- Send SMS/WhatsApp notifications or act as an emergency alert service.
 
-**What judges should see:** create a patient profile → invite caregiver → add a clinician-verified demo schedule → mark a dose taken → switch to the caregiver and see the same state → view the audit event → show the reminder queue and CareLoop evidence. This demonstrates the core workflow and the engineering mechanism, not just a set of dashboard screens.
+Medication details and schedules must be transcribed from a current prescription and checked with the patient's clinician or pharmacist. A reminder is not medical advice; never double a dose because of an app notification.
+
+**Live deployment status:** SMTP credentials and a verified sender have not been configured on the hosted demo, so real email delivery is not enabled. Reminder records and in-app history are available; configure and test a transactional SMTP provider before claiming email delivery.
+
+**Before real-world use:** conduct older-adult and caregiver usability testing, clinical workflow review, security and privacy assessment, formal accessibility testing, database migrations and backups, and move reminder processing to a durable monitored worker. The current free-tier demo is not suitable for real patient data or production care.
+
+---
+
+## Judge walkthrough
+
+A focused demonstration can show the complete collaboration loop:
+
+1. Create a synthetic patient profile and sign in.
+2. Add a clearly labelled test medication schedule using non-clinical example data.
+3. Invite a caregiver and join with a separate PIN.
+4. Invite a family member and verify the read-only boundary.
+5. Record a dose as taken or skipped and show the member-attributed activity event.
+6. Open the reminder centre and explain the 15-minute / 60-minute CareLoop rules.
+7. Add a synthetic appointment and show the shared appointment view.
+8. Open CareLoop Insight and explain its sample threshold and evidence.
+
+Use synthetic data only during public demonstrations.
+
+---
+
+## Repository structure
+
+~~~text
+MitraCare/
+├── app/
+│   ├── main.py          # FastAPI routes, middleware and reminder worker
+│   ├── models.py        # SQLAlchemy data models
+│   ├── schemas.py       # Pydantic request contracts
+│   ├── database.py      # SQLite / PostgreSQL engine configuration
+│   ├── engine.py        # CareLoop, reminders, outbox and routine insight
+│   ├── security.py      # PIN hashing, sessions and authorization helpers
+│   └── seed_demo.py     # Local synthetic demo data only
+├── static/
+│   ├── index.html       # Accessible application entry point
+│   ├── app.js           # Browser UI and client interactions
+│   └── styles.css       # Responsive visual system
+├── tests/
+│   └── test_core.py     # Backend and workflow tests
+├── .github/workflows/
+│   └── tests.yml        # CI quality checks
+├── render.yaml          # Render web service + PostgreSQL blueprint
+├── requirements.txt
+├── ARCHITECTURE.md
+├── RESEARCH.md
+├── DEMO_SCRIPT.md
+└── README.md
+~~~
+
+---
+
+## Project
+
+**MitraCare** — built for the Catalyst Solo AI Hackathon, challenge: *Elderly Care & Medication Management Platform*.
+
+- **Repository:** [github.com/shashankkumar8/MitraCare](https://github.com/shashankkumar8/MitraCare)
+- **Live demo:** [mitracare-api-shashank-k8r3-cfr0.onrender.com](https://mitracare-api-shashank-k8r3-cfr0.onrender.com)
+- **API docs:** [Swagger UI](https://mitracare-api-shashank-k8r3-cfr0.onrender.com/docs)
+
