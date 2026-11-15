@@ -44,7 +44,7 @@ A reminder is queued 15 minutes before a scheduled dose. If no check-in is recor
 - **Database:** SQLite for local evaluation; PostgreSQL recommended for hosted use
 - **Frontend:** HTML, CSS, vanilla JavaScript (no build step, no React dependency, no placeholder screens)
 - **Reminder engine:** deterministic Python worker, database outbox, uniqueness constraints, SMTP with retries
-- **Deployment target:** Google Cloud Run (Docker) + Cloud SQL PostgreSQL for persistence
+- **Deployment target:** Render web service + managed PostgreSQL (configured in `render.yaml`)
 - **Testing:** pytest + FastAPI TestClient + isolated in-memory SQLite databases
 
 No external generative model is used in the medication path. The highest-risk actions are deterministic and auditable by design. The product's intelligence is an explainable pattern signal; it is not marketed as clinical AI.
@@ -118,43 +118,9 @@ The included tests cover profile creation/login/logout, invalid PIN and timezone
 
 **Last local verification in this build:** `17 passed` under pytest; `node --check static/app.js` completed without syntax errors. These are automated local tests with synthetic fixtures, not field trials with real older adults or live SMTP. Re-run them on your machine and test in a real browser before claiming deployment readiness.
 
-## Deploy the frontend to Netlify + API to Render
+## Live demo
 
-This project is a full-stack FastAPI application. Netlify hosts the static UI and proxies `/api/*` to a Render-hosted FastAPI service. The `render.yaml` Blueprint provisions a Python web service and PostgreSQL; `netlify.toml` builds the static frontend and configures the same-origin API proxy.
-
-1. Deploy the backend first: open [Render Blueprint](https://dashboard.render.com/blueprints/new?repo=https://github.com/shashankkumar8/MitraCare), connect this repository, review the `render.yaml` resources, and apply the Blueprint.
-2. Wait for the Render service to become live. Verify `https://mitracare-api-shashank-k8r3.onrender.com/api/health` returns `{"status":"ok"}`. If Render assigns a different hostname, update the `/api/*` target in `netlify.toml` to that exact hostname and push the change.
-3. Deploy the frontend: open [Netlify Git import](https://app.netlify.com/start/deploy?repository=https://github.com/shashankkumar8/MitraCare), select `main`, and keep the repository root as the base directory. Netlify reads `netlify.toml` automatically.
-4. Test `https://YOUR-SITE.netlify.app/api/health`, then sign in with synthetic demo data only.
-
-The Render free service may spin down when idle and the free PostgreSQL database expires after its stated trial period; check the current plan limits before relying on it. SMTP is not provisioned by default, so add a verified sender and protected SMTP environment variables before claiming email delivery. This prototype is not clinically validated and must not store real patient health data.
-
-See [`DEPLOY_NETLIFY.md`](DEPLOY_NETLIFY.md) for the deployment checklist.
-
-## Deploy to Cloud Run
-
-The app is container-ready. **Do not use SQLite on Cloud Run for a judged hosted demo**: the container filesystem is not a durable database. Use Cloud SQL PostgreSQL and Secret Manager for credentials. This deployment path requires a Google Cloud project with billing and permissions; they are not included in this source archive.
-
-1. Create a Cloud SQL PostgreSQL database and database user. Grant the Cloud Run service account `roles/cloudsql.client` and `roles/secretmanager.secretAccessor`.
-2. Store the complete SQLAlchemy connection string in Secret Manager as `mitracare-database-url`. For example, the DSN uses `postgresql+psycopg://USER:PASSWORD@/DBNAME?host=/cloudsql/PROJECT:REGION:INSTANCE`.
-3. Store SMTP password as `mitracare-smtp-password` in Secret Manager. Add the secret versions before deploying.
-4. From this directory run (replace the uppercase placeholders):
-
-```bash
-gcloud run deploy mitracare \
-  --source . \
-  --region asia-south1 \
-  --allow-unauthenticated \
-  --min 1 --max 1 --no-cpu-throttling \
-  --add-cloudsql-instances PROJECT:REGION:INSTANCE \
-  --set-env-vars COOKIE_SECURE=true,SMTP_HOST=SMTP_PROVIDER_HOST,SMTP_PORT=587,SMTP_USER=SMTP_USERNAME,SMTP_FROM=verified-sender@example.com \
-  --set-secrets DATABASE_URL=mitracare-database-url:latest,SMTP_PASSWORD=mitracare-smtp-password:latest
-```
-
-5. Copy the `https://...run.app` URL printed by Cloud Run. Open it in a private browser window, create a new test patient, invite one caregiver and one family member, and verify each role before using it in the submission.
-6. Test a dose reminder with a controlled test schedule and a mailbox you own. Check both the in-app reminder history and the received email. Do not use a real patient's information for a public demonstration.
-
-`--min 1 --max 1 --no-cpu-throttling` is intentional for this prototype because the reminder loop runs inside the service process. It keeps one instance warm and allows the worker to run; it also incurs ongoing Cloud Run cost. For production, move reminders to a separate Cloud Scheduler/Cloud Tasks worker and use stronger operational controls. Cloud Run deployment has **not** been executed from this workspace because no Google Cloud project, credentials, database, or SMTP account were supplied.
+The hosted demo URL will be published here after the API and persistent database pass their health checks.
 
 ## API overview
 
