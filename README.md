@@ -87,7 +87,7 @@ Open <http://127.0.0.1:8000>.
 | Patient | `MTDEMO26` | `246810` |
 | Caregiver | `MTDEMO26` | `135790` |
 
-The synthetic demo includes example medications and a clearly labelled demo appointment. They are not real prescriptions or a clinical schedule. You can also create a new profile from the welcome screen.
+The local synthetic demo (created only when you run `python -m app.seed_demo`) includes example medications and a clearly labelled demo appointment. It is not seeded on the public hosted service. These are not real prescriptions or a clinical schedule. You can create a new profile from the welcome screen.
 
 ## Configure real email delivery
 
@@ -120,7 +120,17 @@ The included tests cover profile creation/login/logout, invalid PIN and timezone
 
 ## Live demo
 
-The hosted demo URL will be published here after the API and persistent database pass their health checks.
+**Application:** https://mitracare-api-shashank-k8r3-cfr0.onrender.com
+
+**API health:** https://mitracare-api-shashank-k8r3-cfr0.onrender.com/api/health
+
+**Interactive API docs:** https://mitracare-api-shashank-k8r3-cfr0.onrender.com/docs
+
+The application is deployed on Render in Singapore with a managed PostgreSQL 18 database. The deployment was verified as `live` and Render's `/api/health` health checks returned HTTP 200 after startup.
+
+For the hosted instance, create a new patient profile from the welcome screen. The local synthetic demo accounts listed above are not seeded into the public service. Email delivery is not enabled until valid SMTP credentials and a verified sender are configured; in-app reminders remain available.
+
+**Free-tier limitations:** the web service can spin down after inactivity, causing a cold-start delay. The free PostgreSQL database is scheduled to expire on **15 December 2026**. Do not use this temporary hackathon deployment for real patient or other sensitive health data; move to a paid persistent database, configure backups and secrets, and complete security and clinical validation before any real-world use.
 
 ## API overview
 
