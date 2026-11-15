@@ -1,0 +1,300 @@
+import asyncio, json, secrets, string, os, logging, hashlib
+from datetime import datetime, timedelta, timezone
+from contextlib import asynccontextmanager
+from zoneinfo import ZoneInfo
+from pathlib import Path
+from fastapi import FastAPI, Depends, HTTPException, Request, Response
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session as DBSession
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import desc
+from .database import Base, make_database
+from .models import Profile, Member, Session as LoginSession, AuthAttempt, Invite, Medication, Dose, Appointment, Audit, Notification
+from .schemas import CreateProfile, Login, InviteCreate, JoinInvite, MedicationCreate, DoseAction, AppointmentCreate
+from .security import COOKIE, hash_secret, verify_secret, token_digest, create_session, current_member, require_write, pin_valid
+from .engine import audit, materialize_doses, process_reminders, deliver_pending, as_utc, care_insights
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+ROOT = Path(__file__).resolve().parent.parent
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(app.state.engine)
+    task = asyncio.create_task(reminder_worker(app))
+    yield
+    task.cancel()
+    try: await task
+    except asyncio.CancelledError: pass
+
+app = FastAPI(title="MitraCare API", version="1.0.0", description="Patient-first shared medication and appointment coordination", lifespan=lifespan)
+app.state.engine, app.state.SessionLocal = make_database()
+app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+
+def get_db():
+    db = app.state.SessionLocal()
+    try: yield db
+    finally: db.close()
+
+def auth(request: Request, db: DBSession = Depends(get_db)):
+    member, _ = current_member(request, db)
+    profile = db.get(Profile, member.profile_id)
+    if not profile: raise HTTPException(401, "Care profile not found.")
+    return member, profile
+
+def set_login(response: Response, token: str):
+    response.set_cookie(COOKIE, token, httponly=True, secure=os.getenv("COOKIE_SECURE", "false").lower() == "true", samesite="strict", max_age=43200, path="/")
+
+def profile_payload(profile, member):
+    return {"profile": {"id": profile.id, "name": profile.name, "timezone": profile.timezone, "code": profile.code}, "member": {"id": member.id, "name": member.name, "role": member.role, "email": member.email}}
+
+@app.middleware("http")
+async def harden_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    response.headers["Cache-Control"] = "no-store" if request.url.path.startswith("/api") else "no-cache"
+    return response
+
+@app.get("/")
+def home(): return FileResponse(ROOT / "static" / "index.html")
+
+@app.get("/api/health")
+def health(): return {"status": "ok", "service": "mitracare", "version": "1.0.0"}
+
+@app.post("/api/profiles", status_code=201)
+def create_profile(data: CreateProfile, response: Response, db: DBSession = Depends(get_db)):
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    try: ZoneInfo(data.timezone)
+    except ZoneInfoNotFoundError: raise HTTPException(422, "Choose a valid timezone.")
+    if data.email and "@" not in data.email: raise HTTPException(422, "Enter a valid email address.")
+    code = "MT" + "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(7))
+    profile = Profile(code=code, name=data.name.strip(), timezone=data.timezone)
+    db.add(profile); db.flush()
+    owner = Member(profile_id=profile.id, name=data.name.strip(), email=data.email.strip().lower(), role="patient", pin_hash=hash_secret(data.pin))
+    db.add(owner); db.commit(); db.refresh(profile); db.refresh(owner)
+    set_login(response, create_session(db, owner))
+    audit(db, profile.id, owner.id, "profile_created", "Patient created a care profile")
+    db.commit()
+    return {**profile_payload(profile, owner), "profile_code": code, "message": "Save this profile code; it is needed with your PIN to sign in."}
+
+@app.post("/api/auth/login")
+def login(data: Login, request: Request, response: Response, db: DBSession = Depends(get_db)):
+    now = datetime.now(timezone.utc)
+    peer = request.client.host if request.client else "unknown"
+    attempt_key = hashlib.sha256(f"{data.profile_code.strip().upper()}|{peer}".encode()).hexdigest()
+    attempt = db.query(AuthAttempt).filter_by(key_hash=attempt_key).first()
+    if attempt and attempt.locked_until and as_utc(attempt.locked_until) > now:
+        raise HTTPException(429, "Too many attempts. Try again in 10 minutes.")
+    profile = db.query(Profile).filter_by(code=data.profile_code.strip().upper()).first()
+    members = db.query(Member).filter_by(profile_id=profile.id, active=True).all() if profile else []
+    member = next((m for m in members if verify_secret(data.pin, m.pin_hash)), None)
+    if not member:
+        if not attempt:
+            attempt = AuthAttempt(key_hash=attempt_key, failed_count=1, first_failed_at=now)
+            db.add(attempt)
+        else:
+            if now - as_utc(attempt.first_failed_at) > timedelta(minutes=10):
+                attempt.failed_count = 1; attempt.first_failed_at = now; attempt.locked_until = None
+            else:
+                attempt.failed_count += 1
+            if attempt.failed_count >= 5: attempt.locked_until = now + timedelta(minutes=10)
+        db.commit()
+        raise HTTPException(401, "Profile code or PIN is incorrect.")
+    if attempt: db.delete(attempt); db.commit()
+    set_login(response, create_session(db, member))
+    return profile_payload(profile, member)
+
+@app.post("/api/auth/join")
+def join(data: JoinInvite, response: Response, db: DBSession = Depends(get_db)):
+    invite = db.query(Invite).filter_by(code_hash=token_digest(data.invite_code.strip().upper())).first()
+    now = datetime.now(timezone.utc)
+    if not invite or invite.used_at or as_utc(invite.expires_at) < now:
+        raise HTTPException(400, "Invite is invalid, expired, or already used.")
+    if data.email and "@" not in data.email: raise HTTPException(422, "Enter a valid email address.")
+    member = Member(profile_id=invite.profile_id, name=data.name.strip(), email=data.email.strip().lower(), role=invite.role, pin_hash=hash_secret(data.pin))
+    invite.used_at = now; db.add(member); db.flush()
+    audit(db, invite.profile_id, invite.created_by, "member_joined", f"{data.name.strip()} joined as {invite.role}")
+    db.commit(); db.refresh(member)
+    profile = db.get(Profile, invite.profile_id)
+    set_login(response, create_session(db, member))
+    return profile_payload(profile, member)
+
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response, db: DBSession = Depends(get_db)):
+    token = request.cookies.get(COOKIE)
+    if token: db.query(LoginSession).filter_by(token_hash=token_digest(token)).delete(); db.commit()
+    response.delete_cookie(COOKIE, path="/", httponly=True, samesite="strict")
+    return {"ok": True}
+
+@app.get("/api/me")
+def me(ctx=Depends(auth)):
+    member, profile = ctx
+    return profile_payload(profile, member)
+
+@app.post("/api/invites", status_code=201)
+def create_invite(data: InviteCreate, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    if member.role != "patient": raise HTTPException(403, "Only the patient can invite care-circle members.")
+    if data.email and "@" not in data.email: raise HTTPException(422, "Enter a valid email address.")
+    code = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+    inv = Invite(profile_id=profile.id, code_hash=token_digest(code), role=data.role, created_by=member.id, expires_at=datetime.now(timezone.utc)+timedelta(hours=24))
+    db.add(inv); audit(db, profile.id, member.id, "invite_created", f"Invited {data.name} as {data.role}"); db.commit()
+    return {"invite_code": code, "role": data.role, "expires_in_hours": 24, "share_message": f"Join {profile.name}'s MitraCare circle. Use invite code {code} and create your own 6–8 digit PIN. Expires in 24 hours."}
+
+@app.get("/api/members")
+def members(ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    rows = db.query(Member).filter_by(profile_id=profile.id, active=True).order_by(Member.id).all()
+    return [{"id": m.id, "name": m.name, "role": m.role, "email": m.email} for m in rows]
+
+@app.post("/api/medications", status_code=201)
+def add_medication(data: MedicationCreate, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx; require_write(member)
+    if data.end_date and data.end_date < data.start_date: raise HTTPException(422, "End date cannot be before start date.")
+    if len(data.times) != len(set(data.times)): raise HTTPException(422, "Remove duplicate schedule times.")
+    med = Medication(profile_id=profile.id, name=data.name.strip(), strength=data.strength.strip(), instructions=data.instructions.strip(), route=data.route, times_json=json.dumps(data.times), start_date=data.start_date, end_date=data.end_date, prescriber=data.prescriber.strip(), created_by=member.id)
+    db.add(med); db.flush(); materialize_doses(db, profile)
+    audit(db, profile.id, member.id, "medication_added", f"Added medication schedule: {med.name}"); db.commit(); db.refresh(med)
+    return medication_json(med)
+
+def medication_json(m):
+    return {"id": m.id, "name": m.name, "strength": m.strength, "instructions": m.instructions, "route": m.route, "times": json.loads(m.times_json), "start_date": m.start_date, "end_date": m.end_date, "prescriber": m.prescriber, "active": m.active}
+
+@app.get("/api/medications")
+def medications(ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    return [medication_json(m) for m in db.query(Medication).filter_by(profile_id=profile.id).order_by(desc(Medication.active), Medication.name).all()]
+
+@app.put("/api/medications/{med_id}")
+def update_medication(med_id: int, data: MedicationCreate, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx; require_write(member)
+    med = db.query(Medication).filter_by(id=med_id, profile_id=profile.id).first()
+    if not med: raise HTTPException(404, "Medication not found.")
+    if not med.active: raise HTTPException(409, "This schedule is paused. Add a new verified schedule instead.")
+    if data.end_date and data.end_date < data.start_date: raise HTTPException(422, "End date cannot be before start date.")
+    med.name = data.name.strip(); med.strength = data.strength.strip(); med.instructions = data.instructions.strip()
+    med.route = data.route; med.times_json = json.dumps(data.times); med.start_date = data.start_date
+    med.end_date = data.end_date; med.prescriber = data.prescriber.strip()
+    materialize_doses(db, profile)
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo(profile.timezone); allowed = set(data.times)
+    for dose in db.query(Dose).filter_by(profile_id=profile.id, medication_id=med.id, status="pending").all():
+        local = as_utc(dose.scheduled_at).astimezone(zone)
+        local_day = local.date().isoformat()
+        valid_day = local_day >= data.start_date and (not data.end_date or local_day <= data.end_date)
+        if not valid_day or local.strftime("%H:%M") not in allowed:
+            dose.status = "superseded"
+    audit(db, profile.id, member.id, "medication_updated", f"Updated verified medication schedule: {med.name}")
+    db.commit(); db.refresh(med)
+    return medication_json(med)
+
+@app.patch("/api/medications/{med_id}/deactivate")
+def deactivate_medication(med_id: int, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx; require_write(member)
+    med = db.query(Medication).filter_by(id=med_id, profile_id=profile.id).first()
+    if not med: raise HTTPException(404, "Medication not found.")
+    if med.active:
+        med.active = False
+        now = datetime.now(timezone.utc)
+        for dose in db.query(Dose).filter_by(profile_id=profile.id, medication_id=med.id, status="pending").all():
+            if as_utc(dose.scheduled_at) >= now: dose.status = "superseded"
+        audit(db, profile.id, member.id, "medication_deactivated", f"Deactivated medication: {med.name}"); db.commit()
+    return {"ok": True, "medication": medication_json(med)}
+
+@app.get("/api/dashboard")
+def dashboard(ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    process_reminders(db, profile)
+    now = datetime.now(timezone.utc)
+    zone = ZoneInfo(profile.timezone)
+    start = now - timedelta(days=7)
+    recent = db.query(Dose).filter(Dose.profile_id == profile.id, Dose.scheduled_at >= start, Dose.scheduled_at <= now+timedelta(days=1)).all()
+    total = sum(d.status in ("taken", "skipped", "missed") for d in recent)
+    taken = sum(d.status == "taken" for d in recent)
+    adherence = round(taken / total * 100) if total else None
+    next_doses = db.query(Dose).filter(Dose.profile_id == profile.id, Dose.scheduled_at >= now-timedelta(hours=1), Dose.status != "superseded").order_by(Dose.scheduled_at).limit(40).all()
+    meds = {m.id: m for m in db.query(Medication).filter_by(profile_id=profile.id).all()}
+    dose_rows = []
+    for d in next_doses:
+        med = meds.get(d.medication_id)
+        if med:
+            when = as_utc(d.scheduled_at)
+            dose_rows.append({"id": d.id, "medication_id": med.id, "medication": med.name, "strength": med.strength, "instructions": med.instructions, "scheduled_at": when.isoformat(), "local_time": when.astimezone(zone).strftime("%a, %d %b · %I:%M %p"), "status": "due" if d.status == "pending" and when <= now else d.status})
+    upcoming_appts = db.query(Appointment).filter(Appointment.profile_id == profile.id, Appointment.starts_at >= now-timedelta(hours=2)).order_by(Appointment.starts_at).limit(8).all()
+    appt_rows = [{"id": a.id, "clinician": a.clinician, "location": a.location, "starts_at": as_utc(a.starts_at).isoformat(), "local_time": as_utc(a.starts_at).astimezone(zone).strftime("%a, %d %b · %I:%M %p"), "local_day": as_utc(a.starts_at).astimezone(zone).strftime("%d"), "local_month": as_utc(a.starts_at).astimezone(zone).strftime("%b"), "notes": a.notes} for a in upcoming_appts]
+    missed = sum(d.status == "missed" for d in recent)
+    pending_alerts = db.query(Notification).filter_by(profile_id=profile.id).order_by(desc(Notification.created_at)).limit(12).all()
+    email_count = db.query(Member).filter(Member.profile_id == profile.id, Member.active == True, Member.email != "").count()
+    email_ready = bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_USER") and os.getenv("SMTP_PASSWORD") and email_count > 0)
+    return {"profile": profile.name, "timezone": profile.timezone, "adherence_7d": adherence, "taken_7d": taken, "recorded_7d": total, "missed_7d": missed, "doses": dose_rows, "appointments": appt_rows, "notifications": [notification_json(n) for n in pending_alerts], "email_configured": email_ready, "email_recipients": email_count, "role": member.role}
+
+@app.post("/api/doses/{dose_id}/mark")
+def mark_dose(dose_id: int, data: DoseAction, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx; require_write(member)
+    dose = db.query(Dose).filter_by(id=dose_id, profile_id=profile.id).first()
+    if not dose: raise HTTPException(404, "Dose event not found.")
+    if dose.status != "pending": raise HTTPException(409, f"This dose is already recorded as {dose.status}. Changes are locked to preserve the audit trail.")
+    dose.status = data.action; dose.action_by = member.id; dose.action_at = datetime.now(timezone.utc); dose.note = data.note.strip()
+    med = db.get(Medication, dose.medication_id)
+    audit(db, profile.id, member.id, f"dose_{data.action}", f"{med.name if med else 'Medication'} dose #{dose.id} marked {data.action}")
+    db.commit()
+    return {"ok": True, "status": dose.status, "message": "Dose status saved. This record does not advise taking, skipping, or repeating a dose."}
+
+@app.post("/api/appointments", status_code=201)
+def add_appointment(data: AppointmentCreate, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx; require_write(member)
+    starts = data.starts_at
+    if starts.tzinfo is None: starts = starts.replace(tzinfo=ZoneInfo(profile.timezone))
+    if starts.astimezone(timezone.utc) < datetime.now(timezone.utc)-timedelta(minutes=5): raise HTTPException(422, "Appointment must be in the future.")
+    appt = Appointment(profile_id=profile.id, clinician=data.clinician.strip(), location=data.location.strip(), starts_at=starts.astimezone(timezone.utc), notes=data.notes.strip(), created_by=member.id)
+    db.add(appt); db.flush(); audit(db, profile.id, member.id, "appointment_added", f"Added appointment with {appt.clinician}"); db.commit()
+    return {"id": appt.id, "clinician": appt.clinician, "location": appt.location, "starts_at": as_utc(appt.starts_at).isoformat()}
+
+@app.get("/api/appointments")
+def appointments(ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    zone = ZoneInfo(profile.timezone)
+    return [{"id": a.id, "clinician": a.clinician, "location": a.location, "starts_at": as_utc(a.starts_at).isoformat(), "local_time": as_utc(a.starts_at).astimezone(zone).strftime("%a, %d %b · %I:%M %p"), "local_day": as_utc(a.starts_at).astimezone(zone).strftime("%d"), "local_month": as_utc(a.starts_at).astimezone(zone).strftime("%b"), "notes": a.notes} for a in db.query(Appointment).filter_by(profile_id=profile.id).order_by(Appointment.starts_at).all()]
+
+def notification_json(n):
+    return {"id": n.id, "kind": n.kind, "subject": n.subject, "body": n.body, "status": n.status, "created_at": as_utc(n.created_at).isoformat()}
+
+@app.get("/api/insights")
+def insights(ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    return care_insights(db, profile)
+
+@app.get("/api/notifications")
+def notifications(ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    return [notification_json(n) for n in db.query(Notification).filter_by(profile_id=profile.id).order_by(desc(Notification.created_at)).limit(50).all()]
+
+@app.get("/api/activity")
+def activity(ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    rows = db.query(Audit).filter_by(profile_id=profile.id).order_by(desc(Audit.created_at)).limit(30).all()
+    actors = {m.id: m.name for m in db.query(Member).filter_by(profile_id=profile.id).all()}
+    return [{"actor": actors.get(a.actor_id, "MitraCare system"), "action": a.action.replace("_", " "), "detail": a.detail, "at": as_utc(a.created_at).isoformat()} for a in rows]
+
+@app.get("/api/settings/reminders")
+def reminder_settings(ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    email_count = db.query(Member).filter(Member.profile_id == profile.id, Member.active == True, Member.email != "").count()
+    return {"email_configured": bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_USER") and os.getenv("SMTP_PASSWORD") and email_count > 0), "alert_email_count": email_count, "dose_grace_minutes": 60, "upcoming_dose_minutes": 15, "appointment_leads_hours": [24, 1], "timezone": profile.timezone}
+
+async def reminder_worker(app):
+    while True:
+        try:
+            db = app.state.SessionLocal()
+            try:
+                profiles = db.query(Profile).all()
+                for profile in profiles: process_reminders(db, profile)
+                deliver_pending(db)
+            finally: db.close()
+        except Exception:
+            logging.exception("Reminder worker iteration failed")
+        await asyncio.sleep(60)
