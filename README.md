@@ -118,6 +118,19 @@ The included tests cover profile creation/login/logout, invalid PIN and timezone
 
 **Last local verification in this build:** `17 passed` under pytest; `node --check static/app.js` completed without syntax errors. These are automated local tests with synthetic fixtures, not field trials with real older adults or live SMTP. Re-run them on your machine and test in a real browser before claiming deployment readiness.
 
+## Deploy the frontend to Netlify + API to Render
+
+This project is a full-stack FastAPI application. Netlify hosts the static UI and proxies `/api/*` to a Render-hosted FastAPI service. The `render.yaml` Blueprint provisions a Python web service and PostgreSQL; `netlify.toml` builds the static frontend and configures the same-origin API proxy.
+
+1. Deploy the backend first: open [Render Blueprint](https://dashboard.render.com/blueprints/new?repo=https://github.com/shashankkumar8/MitraCare), connect this repository, review the `render.yaml` resources, and apply the Blueprint.
+2. Wait for the Render service to become live. Verify `https://mitracare-api-shashank-k8r3.onrender.com/api/health` returns `{"status":"ok"}`. If Render assigns a different hostname, update the `/api/*` target in `netlify.toml` to that exact hostname and push the change.
+3. Deploy the frontend: open [Netlify Git import](https://app.netlify.com/start/deploy?repository=https://github.com/shashankkumar8/MitraCare), select `main`, and keep the repository root as the base directory. Netlify reads `netlify.toml` automatically.
+4. Test `https://YOUR-SITE.netlify.app/api/health`, then sign in with synthetic demo data only.
+
+The Render free service may spin down when idle and the free PostgreSQL database expires after its stated trial period; check the current plan limits before relying on it. SMTP is not provisioned by default, so add a verified sender and protected SMTP environment variables before claiming email delivery. This prototype is not clinically validated and must not store real patient health data.
+
+See [`DEPLOY_NETLIFY.md`](DEPLOY_NETLIFY.md) for the deployment checklist.
+
 ## Deploy to Cloud Run
 
 The app is container-ready. **Do not use SQLite on Cloud Run for a judged hosted demo**: the container filesystem is not a durable database. Use Cloud SQL PostgreSQL and Secret Manager for credentials. This deployment path requires a Google Cloud project with billing and permissions; they are not included in this source archive.
