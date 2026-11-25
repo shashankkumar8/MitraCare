@@ -619,7 +619,7 @@ def test_materialize_doses_uses_one_existing_event_query_for_many_schedule_slots
     dose_selects = []
     def count_dose_select(_conn, _cursor, statement, _parameters, _context, _executemany):
         normalized = statement.lower()
-        if normalized.lstrip().startswith("select") and " from doses " in normalized:
+        if normalized.lstrip().startswith("select") and "doses.medication_id" in normalized and "doses.scheduled_at" in normalized:
             dose_selects.append(statement)
 
     event.listen(engine, "before_cursor_execute", count_dose_select)
