@@ -136,6 +136,16 @@ def chat_reply(message, db, member, profile):
             "“Who is in the care circle?” or “How do reminders work?”. You can also prepare a Visit "
             "brief or Family handover. I cannot answer clinical or medication-decision questions.")
 
+@router.get("/api/companion/capabilities")
+def companion_capabilities(ctx=Depends(require_context)):
+    member, profile = ctx
+    return {
+        "role": member.role,
+        "can_chat": True,
+        "can_prepare_brief": member.role in ("patient", "caregiver"),
+    }
+
+
 @router.post("/api/companion/chat")
 def companion_chat(data: ChatRequest, ctx=Depends(require_context), db: Session=Depends(get_db)):
     member, profile = ctx
