@@ -1,4 +1,4 @@
-import json, os, smtplib, logging
+import json, os, smtplib, logging, hashlib
 from datetime import datetime, timedelta, date, time, timezone
 from email.message import EmailMessage
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -20,15 +20,17 @@ def audit(db: Session, profile_id: int, actor_id: int, action: str, detail: str)
     db.add(Audit(profile_id=profile_id, actor_id=actor_id, action=action, detail=detail[:240]))
 
 def queue_notification(db: Session, profile: Profile, key: str, kind: str, subject: str, body: str):
-    exists = db.query(Notification).filter_by(dedupe_key=key).first()
-    if exists: return False
+    # Keep one in-app event as the visible source of truth; email is a separate outbox.
+    if db.query(Notification).filter_by(dedupe_key=key).first():
+        return False
+    db.add(Notification(profile_id=profile.id, dedupe_key=key, kind=kind, subject=subject,
+                        body=body, recipient="", status="in_app"))
     recipients = db.query(Member).filter(Member.profile_id == profile.id, Member.active == True).all()
     emails = sorted({m.email.strip().lower() for m in recipients if m.email.strip()})
-    if emails:
-        for address in emails:
-            db.add(Notification(profile_id=profile.id, dedupe_key=f"{key}:{address}", kind=kind, subject=subject, body=body, recipient=address, status="queued"))
-    else:
-        db.add(Notification(profile_id=profile.id, dedupe_key=key, kind=kind, subject=subject, body=body, recipient="", status="in_app"))
+    for address in emails:
+        recipient_key = hashlib.sha256(address.encode("utf-8")).hexdigest()[:20]
+        db.add(Notification(profile_id=profile.id, dedupe_key=f"{key}:email:{recipient_key}",
+                            kind=kind, subject=subject, body=body, recipient=address, status="queued"))
     return True
 
 def materialize_doses(db: Session, profile: Profile, now: datetime | None = None):
