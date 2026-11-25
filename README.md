@@ -48,7 +48,7 @@ It is designed around a practical care workflow, not a chatbot: the schedule is 
 | **CareLoop reminders** | Upcoming dose, missed-check-in and appointment reminder events |
 | **Reminder history** | In-app notification records and visible email delivery states |
 | **CareLoop Insight** | Explainable time-of-day routine signals based on recorded check-ins |
-| **Activity log** | Recent member-attributed changes across the care profile |
+| **Shared care tasks** | Assign transport, appointment preparation, supplies and non-clinical follow-ups with ownership |\n| **AI task coach** | Optional Gemini checklist from a fixed category only; local templates work without an API key |\n| **Activity log** | Recent member-attributed changes across the care profile |
 
 ### Why it is different
 
@@ -58,13 +58,13 @@ Most reminder utilities stop at a notification. MitraCare connects the surroundi
 2. **A deterministic event engine:** medication schedules become dated dose events with explicit states and bounded reminder rules.
 3. **A patient-controlled care circle:** the patient chooses who joins and whether they receive caregiver or view-only family access.
 4. **An explainable signal, not a black box:** the routine insight shows its sample, time window and threshold. It does not diagnose or recommend treatment.
-5. **A traceable record:** medication changes, check-ins, invitations and appointments are attributed to a member in the activity history.
+5. **A traceable record:** medication changes, check-ins, invitations, tasks and appointments are attributed to a member in the activity history.\n6. **A reminder is not the whole workflow:** assign transport, supplies and appointment-preparation tasks to a named patient or caregiver, then record completion.\n7. **AI with a narrow privacy boundary:** the optional Task Coach sends only a fixed category label to Gemini—not task titles, notes, identity, medication or health details. Without a server-side key, it returns a clearly labelled local template.
 
 ---
 
 ## Workspace modules
 
-The browser application is organized into six focused work areas.
+The browser application is organized into seven focused work areas.
 
 ### 1. Overview
 
@@ -88,7 +88,7 @@ Add and view doctor or clinician appointments with date/time, location and optio
 
 ### 4. Care circle
 
-The patient controls invitations and access:
+The patient controls invitations and access. Patient owners can revoke an active caregiver or family member; revocation deactivates the member and removes active sessions.\n\nThe patient controls invitations:
 
 | Role | Access |
 |---|---|
@@ -98,11 +98,11 @@ The patient controls invitations and access:
 
 Invitations are single-use, expire after 24 hours and are stored as hashes. Each invited person creates an individual 6–8 digit PIN.
 
-### 5. Activity log
+### 5. Shared care tasks\n\nCreate a follow-up such as arranging transport, preparing for an appointment, checking supplies or coordinating a general callback. Patient and caregiver members can assign it to an active patient/caregiver, set a due time in the profile timezone, complete it or reopen it. The actor is recorded in the activity log. Family remains view-only. These tasks coordinate logistics; they are not medical instructions.\n\n### 6. Activity log
 
 A recent, member-attributed history of profile creation, invitations, medication changes, dose actions and appointment creation. The log helps the care circle understand what was recorded and by whom; it is an operational activity history, not a certified tamper-proof medical record.
 
-### 6. Reminder centre
+### 7. Reminder centre
 
 A consolidated view of reminder records, their type and current delivery state. It also makes the configured dose lead time, missed-check-in grace period and appointment lead times visible.
 
@@ -310,7 +310,7 @@ pytest -q
 node --check static/app.js
 ~~~
 
-The current suite contains **18 tests** covering:
+The current suite contains **24 tests** covering:
 
 - Profile creation, login, logout, invalid PINs and timezone validation.
 - Login lockout and single-use invitation expiry/replay protection.
@@ -322,7 +322,7 @@ The current suite contains **18 tests** covering:
 - Appointment validation.
 - CareLoop Insight minimum-sample behavior.
 - SMTP retry and dead-letter behavior using a mocked mail server.
-- PostgreSQL URL normalization to the installed psycopg 3 driver.
+- PostgreSQL URL normalization to the installed psycopg 3 driver.\n- Reminder fan-out idempotency and in-app fallback when members have email addresses.\n- Shared-task assignment, completion attribution and family read-only access.\n- Patient-controlled member revocation and session invalidation.\n- Task Coach consent and category-only local fallback.\n- Digit-only login PIN validation and duplicate schedule-time rejection.
 - Frontend entry point and static asset delivery.
 
 GitHub Actions runs pytest and the JavaScript syntax check on pushes and pull requests. Automated tests validate software behavior with synthetic fixtures; they are not clinical trials, field testing or proof of email deliverability.
@@ -341,7 +341,7 @@ The complete interactive reference is available at **[Swagger UI](https://mitrac
 | Identity | POST | /api/auth/logout | Revoke current session |
 | Identity | GET | /api/me | Read current member and profile |
 | Care circle | POST | /api/invites | Patient creates a caregiver/family invite |
-| Care circle | GET | /api/members | List active care-circle members |
+| Care circle | GET | /api/members | List active care-circle members |\n| Care circle | DELETE | /api/members/{member_id} | Patient revokes caregiver/family access |\n| Care tasks | GET / POST | /api/tasks | List or create assigned follow-ups |\n| Care tasks | POST | /api/tasks/{task_id}/complete | Complete a follow-up |\n| Care tasks | POST | /api/tasks/{task_id}/reopen | Reopen a follow-up |\n| Task Coach | GET / POST | /api/task-coach | Read AI status or generate a consented category-only checklist |
 | Medication | GET / POST | /api/medications | List or create medication schedules |
 | Medication | PUT | /api/medications/{med_id} | Update a schedule |
 | Medication | PATCH | /api/medications/{med_id}/deactivate | Pause a schedule |
@@ -384,7 +384,7 @@ MitraCare is a **care coordination and record-keeping prototype**. It does not:
 
 Medication details and schedules must be transcribed from a current prescription and checked with the patient's clinician or pharmacist. A reminder is not medical advice; never double a dose because of an app notification.
 
-**Live deployment status:** SMTP credentials and a verified sender have not been configured on the hosted demo, so real email delivery is not enabled. Reminder records and in-app history are available; configure and test a transactional SMTP provider before claiming email delivery.
+**Live deployment status:** SMTP credentials and a verified sender have not been configured on the hosted demo, so real email delivery is not enabled. In-app reminders remain available; the email outbox is not evidence of delivery.\n\n**AI configuration:** Task Coach runs in local template mode unless a server-side GEMINI_API_KEY is configured. If configured, the Gemini request contains only one fixed category enum; no task title, notes, profile, member identity, medication or health data is sent. Do not enable external AI in a real-care deployment without reviewing provider terms, the privacy notice and applicable data-protection obligations.
 
 **Before real-world use:** conduct older-adult and caregiver usability testing, clinical workflow review, security and privacy assessment, formal accessibility testing, database migrations and backups, and move reminder processing to a durable monitored worker. The current free-tier demo is not suitable for real patient data or production care.
 
@@ -401,7 +401,7 @@ A focused demonstration can show the complete collaboration loop:
 5. Record a dose as taken or skipped and show the member-attributed activity event.
 6. Open the reminder centre and explain the 15-minute / 60-minute CareLoop rules.
 7. Add a synthetic appointment and show the shared appointment view.
-8. Open CareLoop Insight and explain its sample threshold and evidence.
+8. Open CareLoop Insight and explain its sample threshold and evidence.\n9. Create “Arrange clinic transport”, assign it to the caregiver, complete it and show who recorded the completion.\n10. Open Task Coach, confirm consent, choose Transport, generate a generic checklist, and add one suggestion as a follow-up. Explain whether Gemini or local template mode ran.\n11. As the patient, revoke a synthetic family member and show that their next login is rejected.
 
 Use synthetic data only during public demonstrations.
 
@@ -445,3 +445,8 @@ MitraCare/
 - **Live demo:** [mitracare-api-shashank-k8r3-cfr0.onrender.com](https://mitracare-api-shashank-k8r3-cfr0.onrender.com)
 - **API docs:** [Swagger UI](https://mitracare-api-shashank-k8r3-cfr0.onrender.com/docs)
 
+
+
+## AI VIBEATHON positioning
+
+MitraCare is a patient-controlled home-care coordination workflow—not the first medication reminder app, a clinical AI assistant or a hardware dispenser. Its AI-enabled component is deliberately narrow: generic task planning from a fixed category. See PRODUCT_STRATEGY.md for competitor analysis and VIBEATHON_SUBMISSION.md for the judge pitch and walkthrough.

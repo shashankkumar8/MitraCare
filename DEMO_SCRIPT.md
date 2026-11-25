@@ -29,3 +29,16 @@ Show CareLoop signal and its method/evidence.
 “We tested role boundaries, failed PINs and lockout, schedule validation, duplicate actions, reminder idempotency, missed-check-in transitions and appointment validation. The prototype is synthetic-data only and needs field usability testing and clinical review before real-world use.”
 
 **Close:** “MitraCare turns isolated medication alarms into a patient-controlled care loop — with trusted access, clear check-ins, and a traceable handoff.”
+
+
+## AI VIBEATHON judge walkthrough (6–8 minutes)
+
+1. Explain the coordination gap in a household.
+2. Create a fictional patient profile and invite caregiver/family accounts.
+3. Add a synthetic schedule, record a check-in and show who recorded it.
+4. Create Arrange clinic transport, assign it to a caregiver and complete it.
+5. Open Task Coach; show the fixed category input and consent. Generate generic ideas. State clearly whether Gemini or local templates are running.
+6. Revoke a synthetic family member and show their next login is rejected.
+7. Close with honest prototype limitations: no clinical validation, no SMTP sender, free-tier hosting.
+
+Use fabricated profiles and schedules only.
