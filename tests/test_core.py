@@ -454,3 +454,130 @@ def test_companion_capabilities_follow_member_role(client):
     assert family_caps.status_code == 200
     assert family_caps.json()["can_chat"] is True
     assert family_caps.json()["can_prepare_brief"] is False
+
+
+
+def test_visit_ready_kit_creates_four_owned_tasks_and_is_idempotent(client):
+    c, _ = client
+    create_patient(c)
+    starts = datetime.now(timezone.utc) + timedelta(days=2)
+    appointment = c.post("/api/appointments", json={
+        "clinician": "Dr Rao",
+        "location": "City Clinic",
+        "starts_at": starts.isoformat(),
+        "notes": "Routine review",
+    })
+    assert appointment.status_code == 201, appointment.text
+    appointment_id = appointment.json()["id"]
+
+    first = c.post(f"/api/appointments/{appointment_id}/prep-kit")
+    assert first.status_code == 201, first.text
+    assert first.json()["created"] is True
+    assert first.json()["count"] == 4
+    assert all(task["status"] == "open" for task in first.json()["tasks"])
+    assert all(task["assignee_name"] == "Meera Sharma" for task in first.json()["tasks"])
+
+    second = c.post(f"/api/appointments/{appointment_id}/prep-kit")
+    assert second.status_code == 201, second.text
+    assert second.json()["created"] is False
+    assert second.json()["count"] == 4
+    assert len(c.get("/api/tasks").json()) == 4
+
+
+def test_family_cannot_create_visit_ready_kit(client):
+    c, _ = client
+    create_patient(c)
+    appointment = c.post("/api/appointments", json={
+        "clinician": "Dr Rao",
+        "starts_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+    })
+    assert appointment.status_code == 201
+    invite = c.post("/api/invites", json={"name": "Family", "role": "family"})
+    assert invite.status_code == 201
+    c.post("/api/auth/logout")
+    joined = c.post("/api/auth/join", json={
+        "invite_code": invite.json()["invite_code"],
+        "name": "Family",
+        "pin": "445566",
+    })
+    assert joined.status_code == 200
+    denied = c.post(f"/api/appointments/{appointment.json()['id']}/prep-kit")
+    assert denied.status_code == 403
+
+
+def test_careops_scorecard_uses_recorded_data_and_visit_prep_coverage(client):
+    from app.models import CareTask, Dose
+
+    c, SessionLocal = client
+    create_patient(c)
+    appointment = c.post("/api/appointments", json={
+        "clinician": "Dr Mehta",
+        "starts_at": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
+    })
+    assert appointment.status_code == 201
+    kit = c.post(f"/api/appointments/{appointment.json()['id']}/prep-kit")
+    assert kit.status_code == 201
+
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        profile = db.query(Profile).one()
+        patient = db.query(Member).filter_by(profile_id=profile.id, role="patient").one()
+        med = Medication(
+            profile_id=profile.id, name="Demo schedule", strength="", instructions="",
+            route="Oral", times_json='["08:00"]',
+            start_date=(now.date() + timedelta(days=1)).isoformat(),
+            end_date="", prescriber="", active=False, created_by=patient.id,
+        )
+        db.add(med)
+        db.flush()
+        db.add(Dose(
+            profile_id=profile.id, medication_id=med.id,
+            scheduled_at=now-timedelta(days=1), status="taken",
+            action_by=patient.id, action_at=now-timedelta(hours=23), note="",
+        ))
+        db.add(Dose(
+            profile_id=profile.id, medication_id=med.id,
+            scheduled_at=now-timedelta(hours=2), status="missed",
+            action_by=None, action_at=None, note="",
+        ))
+        db.add(CareTask(
+            profile_id=profile.id, title="Unassigned transport check", description="",
+            category="transport", due_at=now-timedelta(hours=1), assigned_to=None,
+            created_by=patient.id, status="open",
+        ))
+        db.add(CareTask(
+            profile_id=profile.id, title="Completed admin follow-up", description="",
+            category="follow_up", due_at=None, assigned_to=patient.id,
+            created_by=patient.id, completed_by=patient.id, status="completed",
+            completed_at=now,
+        ))
+        db.commit()
+
+    response = c.get("/api/scorecard")
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["checkins"]["scheduled"] == 2
+    assert result["checkins"]["human_recorded"] == 1
+    assert result["checkins"]["rate_percent"] == 50
+    assert result["tasks"]["open"] == 5
+    assert result["tasks"]["owned_open"] == 4
+    assert result["tasks"]["unassigned_open"] == 1
+    assert result["tasks"]["ownership_percent"] == 80
+    assert result["tasks"]["overdue"] == 1
+    assert result["appointments"]["next_30d"] == 1
+    assert result["appointments"]["with_prep_kit"] == 1
+    assert result["appointments"]["prep_coverage_percent"] == 100
+    assert result["appointments"]["prep_tasks_total"] == 4
+    assert result["appointments"]["prep_tasks_completed"] == 0
+
+
+def test_careops_scorecard_uses_null_for_empty_denominators(client):
+    c, _ = client
+    create_patient(c)
+    response = c.get("/api/scorecard")
+    assert response.status_code == 200
+    result = response.json()
+    assert result["checkins"]["rate_percent"] is None
+    assert result["tasks"]["ownership_percent"] is None
+    assert result["tasks"]["completion_percent"] is None
+    assert result["appointments"]["prep_coverage_percent"] is None

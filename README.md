@@ -459,3 +459,8 @@ A floating **Ask Mitra** companion is available after sign-in. It is a private, 
 It supports task, appointment, care-circle and reminder questions, plus patient-permission-acknowledged **Clinician Visit Brief** and **Family Care Handover** packs. Review each pack before sharing. The patient or caregiver can create a pack; family remains view-only. Copy, download and print are performed locally in the browser. See [COMPANION_GUIDE.md](COMPANION_GUIDE.md).
 
 Care Tasks with due times also create deduplicated in-app due-soon and overdue notifications. This is a coordination reminder, not an emergency alert. Actual email delivery still depends on verified SMTP configuration.
+
+
+## Product and engineering scorecard
+
+The internal quality review, measurable household operating metrics, pilot KPI hypotheses and launch gates are documented in [QUALITY_SCORECARD.md](QUALITY_SCORECARD.md). The live app's CareOps Pulse is generated from the active care profile; its percentages are workflow measures, not clinical outcomes.

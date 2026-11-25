@@ -261,6 +261,78 @@ def appointments(ctx=Depends(auth), db: DBSession = Depends(get_db)):
     zone = ZoneInfo(profile.timezone)
     return [{"id": a.id, "clinician": a.clinician, "location": a.location, "starts_at": as_utc(a.starts_at).isoformat(), "local_time": as_utc(a.starts_at).astimezone(zone).strftime("%a, %d %b · %I:%M %p"), "local_day": as_utc(a.starts_at).astimezone(zone).strftime("%d"), "local_month": as_utc(a.starts_at).astimezone(zone).strftime("%b"), "notes": a.notes} for a in db.query(Appointment).filter_by(profile_id=profile.id).order_by(Appointment.starts_at).all()]
 
+@app.post("/api/appointments/{appointment_id}/prep-kit", status_code=201)
+def create_appointment_prep_kit(appointment_id: int, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    """Create an idempotent, non-clinical preparation checklist for a future appointment."""
+    member, profile = ctx
+    require_write(member)
+    appointment = db.query(Appointment).filter_by(id=appointment_id, profile_id=profile.id).first()
+    if not appointment:
+        raise HTTPException(404, "Appointment not found in this care profile.")
+    now = datetime.now(timezone.utc)
+    starts_at = as_utc(appointment.starts_at)
+    if starts_at <= now:
+        raise HTTPException(409, "Visit preparation is available only for a future appointment.")
+
+    marker = f"[visit-prep:{appointment.id}]"
+    existing = db.query(CareTask).filter(
+        CareTask.profile_id == profile.id,
+        CareTask.description.like(f"%{marker}%"),
+    ).order_by(CareTask.id).all()
+    people = {m.id: m for m in db.query(Member).filter_by(profile_id=profile.id).all()}
+    if existing:
+        return {
+            "created": False,
+            "count": len(existing),
+            "tasks": [task_json(task, people, profile) for task in existing],
+            "message": "A preparation kit already exists for this visit. Existing tasks were returned.",
+        }
+
+    due_at = starts_at - timedelta(hours=2)
+    if due_at < now:
+        due_at = now
+    items = [
+        ("Visit prep · Confirm the details",
+         "Confirm the appointment date, time, clinician and venue with the appointment contact.",
+         "appointment"),
+        ("Visit prep · Gather requested records",
+         "Collect reports, documents or records the clinician has asked the patient to bring.",
+         "appointment"),
+        ("Visit prep · Arrange transport and a companion",
+         "Confirm pickup, return arrangements and who will accompany the patient.",
+         "transport"),
+        ("Visit prep · Prepare questions for the clinician",
+         "Write down questions for the visit. Ask the clinician about any care or medicine changes.",
+         "follow_up"),
+    ]
+    created = []
+    for title, description, category in items:
+        task = CareTask(
+            profile_id=profile.id,
+            title=title,
+            description=f"{description} {marker}",
+            category=category,
+            due_at=due_at,
+            assigned_to=member.id,
+            created_by=member.id,
+            status="open",
+        )
+        db.add(task)
+        created.append(task)
+    db.flush()
+    audit(db, profile.id, member.id, "appointment_prep_kit_created",
+          f"Created four-item preparation kit for appointment #{appointment.id}")
+    db.commit()
+    for task in created:
+        db.refresh(task)
+    return {
+        "created": True,
+        "count": len(created),
+        "tasks": [task_json(task, people, profile) for task in created],
+        "message": "Four practical preparation tasks were assigned to you in Care Tasks.",
+    }
+
+
 
 def task_json(task: CareTask, people: dict[int, Member], profile: Profile):
     zone = ZoneInfo(profile.timezone)
@@ -446,6 +518,131 @@ def notification_json(n):
 def insights(ctx=Depends(auth), db: DBSession = Depends(get_db)):
     member, profile = ctx
     return care_insights(db, profile)
+
+@app.get("/api/scorecard")
+def care_operations_scorecard(ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    """Return descriptive care-operations metrics, never a clinical score or prediction."""
+    member, profile = ctx
+    now = datetime.now(timezone.utc)
+    # Match the dashboard's schedule materialisation so this endpoint works independently.
+    process_reminders(db, profile, now)
+    zone = ZoneInfo(profile.timezone)
+
+    checkin_start = now - timedelta(days=7)
+    dose_events = db.query(Dose).filter(
+        Dose.profile_id == profile.id,
+        Dose.scheduled_at >= checkin_start,
+        Dose.scheduled_at <= now,
+        Dose.status != "superseded",
+    ).all()
+    human_recorded = sum(
+        1 for dose in dose_events
+        if dose.action_at is not None and dose.status in ("taken", "skipped")
+    )
+    scheduled_count = len(dose_events)
+    auto_missed = sum(1 for dose in dose_events if dose.status == "missed" and dose.action_at is None)
+
+    today_local = now.astimezone(zone).date()
+    series_by_day = {}
+    for offset in range(6, -1, -1):
+        day = today_local - timedelta(days=offset)
+        series_by_day[day.isoformat()] = {
+            "date": day.isoformat(),
+            "label": day.strftime("%a"),
+            "scheduled": 0,
+            "recorded": 0,
+        }
+    for dose in dose_events:
+        day_key = as_utc(dose.scheduled_at).astimezone(zone).date().isoformat()
+        if day_key in series_by_day:
+            series_by_day[day_key]["scheduled"] += 1
+            if dose.action_at is not None and dose.status in ("taken", "skipped"):
+                series_by_day[day_key]["recorded"] += 1
+
+    active_members = db.query(Member).filter_by(profile_id=profile.id, active=True).all()
+    writable_member_ids = {item.id for item in active_members if item.role in ("patient", "caregiver")}
+    open_tasks = db.query(CareTask).filter_by(profile_id=profile.id, status="open").all()
+    owned_open = sum(1 for task in open_tasks if task.assigned_to in writable_member_ids)
+    unassigned_open = len(open_tasks) - owned_open
+    overdue_tasks = [
+        task for task in open_tasks
+        if task.due_at is not None and as_utc(task.due_at) < now
+    ]
+    due_next_24h = sum(
+        1 for task in open_tasks
+        if task.due_at is not None and now <= as_utc(task.due_at) <= now + timedelta(hours=24)
+    )
+    task_window_start = now - timedelta(days=30)
+    tasks_created_30d = db.query(CareTask).filter(
+        CareTask.profile_id == profile.id,
+        CareTask.created_at >= task_window_start,
+        CareTask.created_at <= now,
+    ).all()
+    completed_30d = sum(1 for task in tasks_created_30d if task.status == "completed")
+
+    upcoming_appointments = db.query(Appointment).filter(
+        Appointment.profile_id == profile.id,
+        Appointment.starts_at >= now,
+        Appointment.starts_at <= now + timedelta(days=30),
+    ).order_by(Appointment.starts_at).all()
+    prep_tasks = db.query(CareTask).filter(
+        CareTask.profile_id == profile.id,
+        CareTask.description.like("%[visit-prep:%"),
+    ).all()
+    upcoming_prep_tasks = []
+    visits_with_prep_kit = 0
+    for appointment in upcoming_appointments:
+        marker = f"[visit-prep:{appointment.id}]"
+        visit_tasks = [task for task in prep_tasks if marker in task.description]
+        if visit_tasks:
+            visits_with_prep_kit += 1
+            upcoming_prep_tasks.extend(visit_tasks)
+    completed_prep_tasks = sum(1 for task in upcoming_prep_tasks if task.status == "completed")
+
+    next_appointment = upcoming_appointments[0] if upcoming_appointments else None
+    return {
+        "generated_at": now.isoformat(),
+        "checkins": {
+            "window_days": 7,
+            "scheduled": scheduled_count,
+            "human_recorded": human_recorded,
+            "rate_percent": round(human_recorded / scheduled_count * 100) if scheduled_count else None,
+            "automatically_marked_missed": auto_missed,
+        },
+        "tasks": {
+            "open": len(open_tasks),
+            "owned_open": owned_open,
+            "unassigned_open": unassigned_open,
+            "ownership_percent": round(owned_open / len(open_tasks) * 100) if open_tasks else None,
+            "overdue": len(overdue_tasks),
+            "due_next_24h": due_next_24h,
+            "created_30d": len(tasks_created_30d),
+            "completed_30d": completed_30d,
+            "completion_percent": round(completed_30d / len(tasks_created_30d) * 100) if tasks_created_30d else None,
+        },
+        "appointments": {
+            "next_30d": len(upcoming_appointments),
+            "with_prep_kit": visits_with_prep_kit,
+            "prep_coverage_percent": round(visits_with_prep_kit / len(upcoming_appointments) * 100) if upcoming_appointments else None,
+            "prep_tasks_total": len(upcoming_prep_tasks),
+            "prep_tasks_completed": completed_prep_tasks,
+            "prep_task_completion_percent": round(completed_prep_tasks / len(upcoming_prep_tasks) * 100) if upcoming_prep_tasks else None,
+            "next": {
+                "clinician": next_appointment.clinician,
+                "starts_at": as_utc(next_appointment.starts_at).isoformat(),
+                "local_time": as_utc(next_appointment.starts_at).astimezone(zone).strftime("%a, %d %b · %I:%M %p"),
+            } if next_appointment else None,
+        },
+        "series": list(series_by_day.values()),
+        "definitions": {
+            "checkins": "A human-recorded taken/skipped outcome divided by scheduled dose events in the past 7 days. Not proof of ingestion or treatment adherence.",
+            "task_ownership": "Open coordination tasks assigned to an active patient/caregiver divided by all open coordination tasks.",
+            "task_completion": "Tasks created in the past 30 days and marked completed divided by all tasks created in that period.",
+            "visit_prep": "Upcoming appointments in the next 30 days with at least one Visit Ready Kit task divided by all upcoming appointments.",
+            "scope": "Operational coordination metrics only; not a clinical score, risk prediction, or measure of treatment effectiveness.",
+        },
+    }
+
 
 @app.get("/api/notifications")
 def notifications(ctx=Depends(auth), db: DBSession = Depends(get_db)):

@@ -84,3 +84,8 @@ Do not claim improved adherence, fewer hospitalisations or clinical outcomes wit
 ## Non-negotiable safety boundary
 
 MitraCare does not diagnose, prescribe, interpret prescriptions, calculate or recommend doses, check interactions, advise after a missed dose, verify physical ingestion or dispatch emergency help. A clinician-facing brief is a user-entered coordination summary for discussion—not a medical record or clinical assessment. Use synthetic data in this public prototype.
+
+
+## Release addition: integrated care operations
+
+The product now closes the loop from appointments to practical action with the **Visit Ready Kit** (four idempotently generated and assigned preparation tasks) and **CareOps Pulse** (human-recorded check-in activity, task ownership, task completion, visit preparation coverage and overdue work). These measures describe workflow operations only. They are not a clinical score, adherence claim or efficacy measure. See [QUALITY_SCORECARD.md](QUALITY_SCORECARD.md) for definitions, internal maturity judgement, pilot targets and release gates.
