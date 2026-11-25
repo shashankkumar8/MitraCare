@@ -221,6 +221,86 @@ def test_profile_data_isolation(client):
     c.post('/api/auth/login',json={'profile_code':code_b,'pin':'654321'})
     assert c.get('/api/medications').json()==[]
 
+
+def test_notification_fanout_keeps_in_app_fallback_and_deduplicates_email():
+    from app.engine import queue_notification
+    engine = create_engine("sqlite://", connect_args={"check_same_thread":False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine); S = sessionmaker(bind=engine, expire_on_commit=False); db = S()
+    profile = Profile(code="MTRULE05", name="Patient", timezone="UTC"); db.add(profile); db.flush()
+    member = Member(profile_id=profile.id, name="Patient", email="patient@example.com", role="patient", pin_hash=hash_secret("123456"))
+    db.add(member); db.commit()
+    assert queue_notification(db, profile, "dose:test:1", "upcoming_dose", "Reminder", "Test body") is True
+    db.commit()
+    assert queue_notification(db, profile, "dose:test:1", "upcoming_dose", "Reminder", "Test body") is False
+    rows = db.query(Notification).order_by(Notification.id).all()
+    assert len(rows) == 2
+    assert any(row.status == "in_app" and row.recipient == "" and row.dedupe_key == "dose:test:1" for row in rows)
+    assert any(row.status == "queued" and row.recipient == "patient@example.com" and row.dedupe_key.startswith("dose:test:1:email:") for row in rows)
+    db.close(); Base.metadata.drop_all(engine); engine.dispose()
+
+
+def test_shared_care_tasks_are_role_scoped_and_attributed(client):
+    c, _ = client; code = create_patient(c)
+    inv = c.post("/api/invites", json={"name":"Caregiver","role":"caregiver"}).json()
+    c.post("/api/auth/logout")
+    caregiver = c.post("/api/auth/join", json={"invite_code":inv["invite_code"],"name":"Caregiver","pin":"135790"})
+    assert caregiver.status_code == 200
+    care_member = caregiver.json()["member"]
+    task = c.post("/api/tasks", json={"title":"Arrange clinic transport","category":"transport","assigned_to":care_member["id"]})
+    assert task.status_code == 201 and task.json()["assignee_name"] == "Caregiver"
+    done = c.post(f"/api/tasks/{task.json()['id']}/complete")
+    assert done.status_code == 200 and done.json()["status"] == "completed"
+    assert done.json()["completed_by"] == care_member["id"]
+    assert c.post(f"/api/tasks/{task.json()['id']}/complete").status_code == 409
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"profile_code":code,"pin":"246810"})
+    family_invite = c.post("/api/invites", json={"name":"Family","role":"family"})
+    assert family_invite.status_code == 201
+    c.post("/api/auth/logout")
+    family = c.post("/api/auth/join", json={"invite_code":family_invite.json()["invite_code"],"name":"Family","pin":"445566"})
+    assert family.status_code == 200
+    assert c.post("/api/tasks", json={"title":"Arrange transport"}).status_code == 403
+    assert len(c.get("/api/tasks").json()) == 1
+
+
+def test_patient_can_revoke_invited_member_and_active_session(client):
+    c, _ = client; code = create_patient(c)
+    inv = c.post("/api/invites", json={"name":"Family","role":"family"}).json()
+    c.post("/api/auth/logout")
+    family = c.post("/api/auth/join", json={"invite_code":inv["invite_code"],"name":"Family","pin":"445566"})
+    assert family.status_code == 200
+    family_id = family.json()["member"]["id"]
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"profile_code":code,"pin":"246810"})
+    assert c.delete(f"/api/members/{family_id}").status_code == 200
+    c.post("/api/auth/logout")
+    assert c.post("/api/auth/login", json={"profile_code":code,"pin":"445566"}).status_code == 401
+
+
+def test_task_coach_requires_consent_and_uses_local_fallback(monkeypatch, client):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    c, _ = client; create_patient(c)
+    config = c.get("/api/task-coach")
+    assert config.status_code == 200 and config.json()["ai_available"] is False
+    assert c.post("/api/task-coach", json={"category":"transport","consent":False}).status_code == 422
+    result = c.post("/api/task-coach", json={"category":"transport","consent":True})
+    assert result.status_code == 200 and result.json()["mode"] == "template"
+    assert len(result.json()["items"]) == 4
+    assert "health information" in result.json()["notice"]
+
+
+def test_login_rejects_non_numeric_pin(client):
+    c, _ = client; code = create_patient(c)
+    assert c.post("/api/auth/login", json={"profile_code":code,"pin":"12AB56"}).status_code == 422
+
+
+def test_duplicate_medication_times_are_rejected(client):
+    c, _ = client; create_patient(c)
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
+    payload = {"name":"Test medicine","times":["08:00","08:00"],"start_date":today}
+    assert c.post("/api/medications", json=payload).status_code == 422
+
+
 def test_postgres_url_normalizes_to_installed_psycopg3_driver():
     from app.database import make_database
 
