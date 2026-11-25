@@ -19,252 +19,86 @@ def profile_zone(profile: Profile):
 def audit(db: Session, profile_id: int, actor_id: int, action: str, detail: str):
     db.add(Audit(profile_id=profile_id, actor_id=actor_id, action=action, detail=detail[:240]))
 
-def queue_notification(
-    db: Session,
-    profile: Profile,
-    key: str,
-    kind: str,
-    subject: str,
-    body: str,
-    *,
-    known_keys: set[str] | None = None,
-    email_addresses: list[str] | None = None,
-) -> bool:
-    """Queue one deduplicated in-app event and its optional email fan-out.
-
-    The optional per-cycle caches let the reminder worker perform bounded,
-    batched reads instead of querying once per event. Other callers can omit
-    them and retain the safe single-event behaviour.
-    """
-    if known_keys is None:
-        if db.query(Notification.id).filter_by(dedupe_key=key).first():
-            return False
-    else:
-        if key in known_keys:
-            return False
-        # Track newly queued keys immediately; multiple events can be processed
-        # before the transaction is flushed.
-        known_keys.add(key)
-
-    db.add(
-        Notification(
-            profile_id=profile.id,
-            dedupe_key=key,
-            kind=kind,
-            subject=subject,
-            body=body,
-            recipient="",
-            status="in_app",
-        )
-    )
-    if email_addresses is None:
-        recipients = db.query(Member).filter(
-            Member.profile_id == profile.id,
-            Member.active.is_(True),
-            Member.email != "",
-        ).all()
-        addresses = sorted({m.email.strip().lower() for m in recipients if m.email.strip()})
-    else:
-        addresses = email_addresses
-
-    for address in addresses:
+def queue_notification(db: Session, profile: Profile, key: str, kind: str, subject: str, body: str):
+    # Keep one in-app event as the visible source of truth; email is a separate outbox.
+    if db.query(Notification).filter_by(dedupe_key=key).first():
+        return False
+    db.add(Notification(profile_id=profile.id, dedupe_key=key, kind=kind, subject=subject,
+                        body=body, recipient="", status="in_app"))
+    recipients = db.query(Member).filter(Member.profile_id == profile.id, Member.active == True).all()
+    emails = sorted({m.email.strip().lower() for m in recipients if m.email.strip()})
+    for address in emails:
         recipient_key = hashlib.sha256(address.encode("utf-8")).hexdigest()[:20]
-        db.add(
-            Notification(
-                profile_id=profile.id,
-                dedupe_key=f"{key}:email:{recipient_key}",
-                kind=kind,
-                subject=subject,
-                body=body,
-                recipient=address,
-                status="queued",
-            )
-        )
+        db.add(Notification(profile_id=profile.id, dedupe_key=f"{key}:email:{recipient_key}",
+                            kind=kind, subject=subject, body=body, recipient=address, status="queued"))
     return True
 
-def materialize_doses(db: Session, profile: Profile, now: datetime | None = None) -> int:
-    """Materialize a bounded 15-day schedule window with one existing-event query."""
+def materialize_doses(db: Session, profile: Profile, now: datetime | None = None):
     now = as_utc(now or datetime.now(timezone.utc))
     zone = profile_zone(profile)
     local_today = now.astimezone(zone).date()
     meds = db.query(Medication).filter_by(profile_id=profile.id, active=True).all()
-    if not meds:
-        return 0
-
-    # Every eligible schedule lies inside this local-date window. Fetch all
-    # existing events once rather than issuing a SELECT for every medication
-    # and time slot (the previous implementation had an N+1 query pattern).
-    medication_ids = [med.id for med in meds]
-    window_start = datetime.combine(local_today - timedelta(days=7), time.min, tzinfo=zone)
-    window_end = datetime.combine(local_today + timedelta(days=8), time.min, tzinfo=zone)
-    existing_rows = db.query(Dose.medication_id, Dose.scheduled_at).filter(
-        Dose.profile_id == profile.id,
-        Dose.medication_id.in_(medication_ids),
-        Dose.scheduled_at >= window_start.astimezone(timezone.utc),
-        Dose.scheduled_at < window_end.astimezone(timezone.utc),
-    ).all()
-    existing = {(medication_id, as_utc(scheduled_at)) for medication_id, scheduled_at in existing_rows}
-
     made = 0
     for med in meds:
         start = date.fromisoformat(med.start_date)
         end = date.fromisoformat(med.end_date) if med.end_date else local_today + timedelta(days=7)
         first = max(start, local_today - timedelta(days=7))
         last = min(end, local_today + timedelta(days=7))
-        if last < first:
-            continue
-        for day_offset in range((last - first).days + 1):
+        for day_offset in range((last-first).days + 1):
             day = first + timedelta(days=day_offset)
             for hhmm in json.loads(med.times_json):
                 hh, mm = map(int, hhmm.split(":"))
-                scheduled = datetime.combine(day, time(hh, mm), tzinfo=zone).astimezone(timezone.utc)
-                key = (med.id, scheduled)
-                if key not in existing:
-                    db.add(
-                        Dose(
-                            profile_id=profile.id,
-                            medication_id=med.id,
-                            scheduled_at=scheduled,
-                            status="pending",
-                        )
-                    )
-                    existing.add(key)
+                local_dt = datetime.combine(day, time(hh, mm), tzinfo=zone)
+                scheduled = local_dt.astimezone(timezone.utc)
+                exists = db.query(Dose.id).filter_by(medication_id=med.id, scheduled_at=scheduled).first()
+                if not exists:
+                    db.add(Dose(profile_id=profile.id, medication_id=med.id, scheduled_at=scheduled, status="pending"))
                     made += 1
-    if made:
-        db.flush()
+    if made: db.flush()
     return made
 
 def process_reminders(db: Session, profile: Profile, now: datetime | None = None):
-    """Evaluate due reminders using batched reads and idempotent keys."""
     now = as_utc(now or datetime.now(timezone.utc))
     materialize_doses(db, profile, now)
-    zone = profile_zone(profile)
-
-    # Limit pending-dose work to events that can notify during this cycle.
-    doses = db.query(Dose).filter(
-        Dose.profile_id == profile.id,
-        Dose.status == "pending",
-        Dose.scheduled_at <= now + timedelta(minutes=15),
-    ).all()
-    medication_ids = {dose.medication_id for dose in doses}
-    medications = db.query(Medication).filter(
-        Medication.profile_id == profile.id,
-        Medication.id.in_(medication_ids),
-    ).all() if medication_ids else []
-    medication_by_id = {med.id: med for med in medications}
-
-    active_members = db.query(Member).filter(
-        Member.profile_id == profile.id,
-        Member.active.is_(True),
-    ).all()
-    people_by_id = {person.id: person for person in active_members}
-    email_addresses = sorted({
-        person.email.strip().lower()
-        for person in active_members
-        if person.email and person.email.strip()
-    })
-
-    appointments = db.query(Appointment).filter(
-        Appointment.profile_id == profile.id,
-        Appointment.starts_at >= now,
-        Appointment.starts_at <= now + timedelta(hours=25),
-    ).all()
-    open_tasks = db.query(CareTask).filter_by(
-        profile_id=profile.id,
-        status="open",
-    ).filter(CareTask.due_at.is_not(None)).all()
-
-    # Build only the dedupe keys this cycle may emit; fetching the entire
-    # notification history on every minute tick would itself grow unbounded.
-    candidate_keys: set[str] = set()
+    doses = db.query(Dose).filter(Dose.profile_id == profile.id, Dose.status == "pending").all()
     for dose in doses:
         due = as_utc(dose.scheduled_at)
-        if now >= due + timedelta(minutes=GRACE_MINUTES):
-            candidate_keys.add(f"dose:missed:{dose.id}")
-        elif timedelta(0) <= due - now <= timedelta(minutes=15):
-            candidate_keys.add(f"dose:upcoming:{dose.id}")
-    for appointment in appointments:
-        lead = as_utc(appointment.starts_at) - now
-        if timedelta(hours=23, minutes=45) <= lead <= timedelta(hours=24, minutes=15):
-            candidate_keys.add(f"appointment:24h:{appointment.id}")
-        if timedelta(minutes=45) <= lead <= timedelta(hours=1, minutes=15):
-            candidate_keys.add(f"appointment:1h:{appointment.id}")
-    for task in open_tasks:
-        task_due = as_utc(task.due_at)
-        if timedelta(0) <= task_due - now <= timedelta(minutes=60):
-            candidate_keys.add(f"care_task:due:{task.id}")
-        elif now >= task_due + timedelta(minutes=60):
-            candidate_keys.add(f"care_task:overdue:{task.id}")
-
-    known_keys = set()
-    if candidate_keys:
-        rows = db.query(Notification.dedupe_key).filter(
-            Notification.profile_id == profile.id,
-            Notification.dedupe_key.in_(candidate_keys),
-        ).all()
-        known_keys = {row[0] for row in rows}
-
-    for dose in doses:
-        due = as_utc(dose.scheduled_at)
-        med = medication_by_id.get(dose.medication_id)
-        if not med:
-            continue
+        med = db.get(Medication, dose.medication_id)
+        if not med: continue
         if not med.active:
             dose.status = "superseded"
             continue
         if now >= due + timedelta(minutes=GRACE_MINUTES):
             dose.status = "missed"
-            queue_notification(
-                db, profile, f"dose:missed:{dose.id}", "missed_dose",
-                f"Missed dose check-in: {med.name}",
-                f"A scheduled dose of {med.name} ({med.strength}) was not marked taken "
-                f"within the {GRACE_MINUTES}-minute check-in window. Please check in with "
-                "the patient. Do not double a dose; follow the prescribing clinician's instructions.",
-                known_keys=known_keys, email_addresses=email_addresses,
-            )
+            queue_notification(db, profile, f"dose:missed:{dose.id}", "missed_dose", f"Missed dose check-in: {med.name}", f"A scheduled dose of {med.name} ({med.strength}) was not marked taken within the {GRACE_MINUTES}-minute check-in window. Please check in with the patient. Do not double a dose; follow the prescribing clinician's instructions.")
             audit(db, profile.id, None, "dose_missed", f"Dose #{dose.id} moved to missed after grace window")
-        elif timedelta(0) <= due - now <= timedelta(minutes=15):
-            queue_notification(
-                db, profile, f"dose:upcoming:{dose.id}", "upcoming_dose",
-                f"Upcoming medication: {med.name}",
-                f"{med.name} ({med.strength}) is scheduled in about 15 minutes. This is a "
-                "reminder only; follow the prescription label and clinician's instructions.",
-                known_keys=known_keys, email_addresses=email_addresses,
-            )
-
-    for appointment in appointments:
-        starts = as_utc(appointment.starts_at)
-        lead = starts - now
-        local_starts = starts.astimezone(zone)
+        elif timedelta(0) <= due-now <= timedelta(minutes=15):
+            queue_notification(db, profile, f"dose:upcoming:{dose.id}", "upcoming_dose", f"Upcoming medication: {med.name}", f"{med.name} ({med.strength}) is scheduled in about 15 minutes. This is a reminder only; follow the prescription label and clinician's instructions.")
+    appointments = db.query(Appointment).filter(Appointment.profile_id == profile.id, Appointment.starts_at >= now, Appointment.starts_at <= now + timedelta(hours=25)).all()
+    for appt in appointments:
+        starts = as_utc(appt.starts_at)
+        lead = starts-now
         if timedelta(hours=23, minutes=45) <= lead <= timedelta(hours=24, minutes=15):
-            queue_notification(
-                db, profile, f"appointment:24h:{appointment.id}", "appointment",
-                f"Tomorrow: appointment with {appointment.clinician}",
-                f"Appointment at {local_starts.strftime('%a, %d %b %Y, %I:%M %p')} "
-                f"({profile.timezone}). Location: {appointment.location or 'Not specified'}.",
-                known_keys=known_keys, email_addresses=email_addresses,
-            )
+            local_starts = starts.astimezone(profile_zone(profile))
+            queue_notification(db, profile, f"appointment:24h:{appt.id}", "appointment", f"Tomorrow: appointment with {appt.clinician}", f"Appointment at {local_starts.strftime('%a, %d %b %Y, %I:%M %p')} ({profile.timezone}). Location: {appt.location or 'Not specified'}.")
         if timedelta(minutes=45) <= lead <= timedelta(hours=1, minutes=15):
-            queue_notification(
-                db, profile, f"appointment:1h:{appointment.id}", "appointment",
-                f"Appointment in about one hour: {appointment.clinician}",
-                f"Appointment at {local_starts.strftime('%a, %d %b %Y, %I:%M %p')} "
-                f"({profile.timezone}). Location: {appointment.location or 'Not specified'}.",
-                known_keys=known_keys, email_addresses=email_addresses,
-            )
-
+            local_starts = starts.astimezone(profile_zone(profile))
+            queue_notification(db, profile, f"appointment:1h:{appt.id}", "appointment", f"Appointment in about one hour: {appt.clinician}", f"Appointment at {local_starts.strftime('%a, %d %b %Y, %I:%M %p')} ({profile.timezone}). Location: {appt.location or 'Not specified'}.")
+    # Due-soon and overdue shared-task nudges are deduplicated by stable task ID.
+    open_tasks = db.query(CareTask).filter_by(profile_id=profile.id, status="open").all()
     for care_task in open_tasks:
+        if not care_task.due_at:
+            continue
         task_due = as_utc(care_task.due_at)
-        assignee = people_by_id.get(care_task.assigned_to)
+        assignee = db.get(Member, care_task.assigned_to) if care_task.assigned_to else None
         owner = assignee.name if assignee else "the care circle"
         if timedelta(0) <= task_due - now <= timedelta(minutes=60):
             queue_notification(
                 db, profile, f"care_task:due:{care_task.id}", "care_task_due",
                 f"Follow-up due soon: {care_task.title}",
                 f"The coordination follow-up '{care_task.title}' is due at "
-                f"{task_due.astimezone(zone).strftime('%a, %d %b %I:%M %p')}. "
+                f"{task_due.astimezone(profile_zone(profile)).strftime('%a, %d %b %I:%M %p')}. "
                 f"Assigned to: {owner}. Update it in Care Tasks.",
-                known_keys=known_keys, email_addresses=email_addresses,
             )
         elif now >= task_due + timedelta(minutes=60):
             queue_notification(
@@ -272,7 +106,6 @@ def process_reminders(db: Session, profile: Profile, now: datetime | None = None
                 f"Follow-up is overdue: {care_task.title}",
                 f"The coordination follow-up '{care_task.title}' is past its due time. "
                 f"Assigned to: {owner}. Review it in Care Tasks.",
-                known_keys=known_keys, email_addresses=email_addresses,
             )
     db.commit()
 

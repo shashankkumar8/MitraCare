@@ -464,8 +464,3 @@ Care Tasks with due times also create deduplicated in-app due-soon and overdue n
 ## Product and engineering scorecard
 
 The internal quality review, measurable household operating metrics, pilot KPI hypotheses and launch gates are documented in [QUALITY_SCORECARD.md](QUALITY_SCORECARD.md). The live app's CareOps Pulse is generated from the active care profile; its percentages are workflow measures, not clinical outcomes.
-
-
-## Performance engineering note
-
-The reminder scheduler materializes the bounded local-date window with a batched existing-event lookup. Per-cycle reminder processing preloads the relevant medication/member data and checks only candidate deduplication keys, avoiding per-schedule-slot, per-dose, and per-task-owner database lookups. A regression test asserts that adding more medication schedule slots does not increase the number of existing-dose SELECT queries. This improves query growth; it is not a production load-test or uptime claim.
