@@ -78,3 +78,8 @@ Do not use check-in percentages as a proxy for medication effectiveness, patient
 **MitraCare keeps a household's care responsibilities visible and owned—from routine check-ins to visit preparation and family handover—while the patient remains in control.**
 
 The product complements clinicians and caregivers. It is not an emergency-response service, medical record, diagnostic tool, medication decision engine, or substitute for professional care.
+
+
+## Efficiency hardening in the follow-up release
+
+The dose materializer now performs one bounded existing-event query for all active medication schedules in the profile's 15-day local-date window, replacing one lookup per schedule slot. Reminder evaluation now preloads referenced medication/member data, limits pending-dose evaluation to events due within the 15-minute reminder horizon or already overdue, and retrieves only candidate notification keys rather than repeatedly querying each event. A regression test asserts one existing-dose SELECT query for 32 schedule slots and verifies repeat materialization creates no duplicates. This is query-count regression evidence, not a throughput benchmark; production load/soak testing remains a release gate.
