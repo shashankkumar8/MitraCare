@@ -1,59 +1,86 @@
-# MitraCare — product strategy and competitor scan
+# MitraCare — product strategy, competitor scan and monetisation thesis
 
-Research snapshot: 25 November 2026. This is a focused review of public product/help materials, not a full market study or independent clinical evaluation.
+Research snapshot: 25 November 2026. This is a focused review of public product pages and help materials, not an exhaustive market-sizing study or clinical evaluation. Features and prices vary by geography, plan and contract.
 
 ## Product thesis
 
-MitraCare is a patient-controlled care coordination workspace for the work that happens between reminders: shared visibility, clear access boundaries, named responsibility and recorded follow-ups.
+MitraCare is a **patient-owned household care operations and continuity workspace**. It coordinates the work between clinical visits: what was entered, what was recorded, who owns the next practical step, when it is due, who has access, and what information the patient chooses to take to a clinician or share with family.
 
-At-home care tasks are spread across the patient, caregivers and family members. A reminder addresses one moment; it does not assign someone to arrange transport, prepare for a visit, check supplies or record completion. Shared accounts can also obscure who changed a schedule or recorded an event.
+It is not a medication dispenser, EHR, home-care agency platform, clinical decision-support system or emergency service.
 
 ## Competitor scan
 
 | Product | Publicly described capabilities | Implication for MitraCare |
 |---|---|---|
-| Medisafe | Medication reminders and Medfriend missed-dose alerts; Medfriend access is described as view-only. | Reminders and family visibility already exist. MitraCare emphasizes patient-owned roles, caregiver collaboration and attributed actions. |
-| Hero | App paired with a smart dispenser, automatic sorting/dispensing, reminders, adherence visibility and caregiver notifications. | MitraCare is software-first and does not compete on hardware, physical dispensing or inventory. |
-| Birdie | Agency-oriented care platform with a Family App for care logs, visit reports, completed tasks and schedules; read-only family access can be revoked. | MitraCare targets a household/patient-owned circle rather than an agency-managed workforce. Read-only family access is not unique. |
-| CareClinic | Shared caregiver records, medication reminders, appointment/symptom tracking and appointment reports. | Shared records and reminders are established capabilities; MitraCare must differentiate through task accountability and access design. |
+| Medisafe | Medication schedules/reminders, adherence and progress reporting, doctor sharing, Medfriend notifications and dependent profiles | Reminders, caregiver alerts and visit sharing already exist. Do not claim these are unique. |
+| Hero | App plus smart dispenser, automated storage/dispensing, reminders, missed-dose notifications, caregiver visibility and refill support | Hero competes on physical medication management. MitraCare is software-first and vendor-neutral; it does not verify dispensing or stock. |
+| Birdie | Care-agency workflows, visit records, tasks, schedules, family app, reports, messaging and agency operations | Family visibility and tasks already exist. MitraCare targets a patient-owned household circle rather than an agency-managed workforce. |
+| CareClinic | Health journal, medication/appointment tracking, care-team sharing, reports/exports, permissions and an AI assistant | Shared records, exports and AI assistance are established features; the workflow combination is the positioning hypothesis. |
+| Emoha / Anvayaa (India) | Elder-care services with apps/portals plus human care managers, attendants, nursing, medical coordination and emergency support | A software prototype cannot claim to replace staffed elder-care services. A future model could partner with vetted providers. |
 
-Sources: [Medisafe Help Center](https://help-center.medisafe.com/en/articles/12413393-using-medisafe-on-different-devices-in-different-time-zones-use-medfriend-instead), [Hero](https://herohealth.com/medication-management/), [Hero reminders](https://support.herohealth.com/en/articles/14655324-notifications-reminders), [Birdie Family App](https://www.birdie.care/product-features/family-app), [CareClinic](https://careclinic.io/category/caregivers/).
+Public references: [Medisafe](https://www.medisafe.com/), [Medisafe Help](https://help-center.medisafe.com/), [Hero](https://herohealth.com/medication-management/), [Birdie Family App](https://www.birdie.care/product-features/family-app), [CareClinic](https://careclinic.io/category/caregivers/), [Emoha](https://www.emoha.com/), [Anvayaa](https://www.anvayaa.com/).
 
-## Honest USP
+## Honest prototype differentiation
 
-MitraCare's prototype differentiation is the combination of patient-owned role-based identities, patient revocation, attributed dose check-ins, assigned non-clinical follow-ups with due times, deterministic reminder rules and an optional category-only AI checklist. This is a product-positioning hypothesis, not proof of market uniqueness or superior clinical outcomes.
+The prototype's defensible *positioning hypothesis* is the combination of:
 
-## AI boundary
+1. **Patient-owned access:** individual identities, patient invitations and revocation.
+2. **Attributed actions:** medication check-ins and practical tasks record which member acted.
+3. **A shared responsibility queue:** follow-up with owner, due time, status and completion attribution—not only an alarm.
+4. **Continuity packs:** the same record set creates a clinician discussion brief and a family handover, with permission acknowledgement.
+5. **Private local companion:** answers supported workflow questions from data the member may already view; no external AI call and no saved chat text.
+6. **Transparent boundaries:** explains what the app recorded, what it cannot verify, and when a human professional is needed.
 
-Task Coach helps break a non-clinical coordination category into a short checklist (transport, appointment preparation, supplies, general follow-up). It asks for explicit consent. If Gemini is configured, the server sends only the fixed category enum to the Interactions API with `store: false`. It never sends task titles, free-text notes, profile code, member identity, email address, medication names, prescription details or health information. Output is generic and must be reviewed before becoming a shared task. If no server-side key exists or the provider is unavailable, local templates are returned and labelled as templates—not AI.
+These capabilities are not individually unique. The product proposition is the joined-up patient-owned household workflow—not a claim to be the first or objectively superior to every competitor. Usability, reliability and willingness to pay still need validation.
 
-The Gemini Developer API uses the Interactions API endpoint and x-goog-api-key authentication. Keep the key in Render environment variables and set GEMINI_MODEL to one available for your project. The code default is gemini-3.8-flash; availability can vary by account/project.
+## Monetisation thesis — experiments, not forecasts
 
-## Current limitations and demerits
+Charge for coordination convenience and continuity, not access to essential medication information and never by selling health data.
 
-| Limitation | Why it matters | Required path before public real-person use |
+| Offer to test | Hypothesis price | Possible value |
+|---|---:|---|
+| Household Free | ₹0 | One care profile, essential in-app reminders, limited circle and basic tasks |
+| Household Plus | ₹149–₹249/month | More circle seats, recurring tasks, expanded exports/visit packs and longer activity history |
+| Small-provider workspace | ₹999–₹2,499/month starting experiment | A few patient workspaces, staff assignment, task overview and operational exports |
+
+These are pricing experiments—not market benchmarks, validated demand or promised features. Validate with real households and small providers before charging. Account for durable hosting, backups, support, notification delivery, security/privacy and compliance costs. Do not sell patient data or let sponsors influence care recommendations.
+
+## Metrics to prove value
+
+- **Activation:** profile creation and first schedule/appointment.
+- **Circle activation:** invited caregiver accepts and signs in.
+- **Shared responsibility:** first task assigned and completed by its named owner.
+- **Continuity:** permission-acknowledged visit brief or handover created.
+- **Retention:** weekly active circles and four-week circle retention.
+- **Business:** free-to-paid conversion, revenue per household/provider, support cost and gross margin.
+- **Safety/quality:** report correction rate, stale schedule reports, delivery states, access-revocation latency and usability feedback.
+
+Do not claim improved adherence, fewer hospitalisations or clinical outcomes without a properly designed prospective evaluation.
+
+## Current demerits and release gates
+
+| Limitation | Why it matters | Before a real-world pilot |
 |---|---|---|
-| Render free service may sleep; hosted free database is temporary and expires 15 Dec 2026 | Not appropriate for continuity-sensitive care | Durable hosting/database, backups, restore drills and monitoring |
-| SMTP is not configured | Queued email is not delivered email | Verified transactional sender and tested delivery/bounce handling |
-| Reminder worker runs inside web process | Sleep/restart pauses reminders; multi-instance processes risk duplicates | Dedicated worker and durable queue/locking |
-| No SMS, push or voice escalation | In-app reminders depend on opening app; not emergency response | Add opt-in channels only after consent/delivery testing |
-| Medication schedules are manually entered | Transcription mistakes remain possible | Second-person verification/last-verified workflow; never infer prescriptions |
-| No refill/inventory model | Cannot know actual remaining tablets | Add only with user-confirmed counts and tested workflow |
-| PIN authentication | Numeric PINs are low entropy despite hashing and lockout | Passkeys or password+MFA, session management and stronger abuse controls |
-| No formal migrations or deletion/export | create_all is not a production migration/retention strategy | Alembic, deletion/export, retention and recovery process |
-| No independent security/privacy review | Health-related data needs careful governance | Threat model, privacy notice, provider review and external security test |
-| No older-adult usability study/WCAG audit | Responsive UI does not prove accessibility | Test with older adults, keyboard and screen-reader users |
-| No clinical validation | Stale or incorrect schedules can be recorded | Clinician/pharmacist workflow review; no clinical claims |
-| No EMR/provider integration | Data is manually duplicated | Authorized partnerships and standards-based integrations |
+| Free hosting can sleep; hosted free DB was scheduled to expire 15 Dec 2026 | Records require durable operations | Durable service/database, backups and restore drills |
+| Reminder worker runs in the web process | Sleep/restarts pause work; multi-instance may duplicate work | Dedicated worker, durable queue, locking and monitoring |
+| SMTP is not configured on current demo | Queued email is not delivery | Verified sender, bounce handling and delivery tests |
+| PIN-only authentication; no recovery flow | Recovery and abuse resistance are limited | Stronger auth, recovery and session management |
+| Manual medication entry | Transcription errors remain possible | Verification/last-verified workflow; do not infer prescriptions |
+| No migrations or user export/delete workflow | Unsafe to evolve or retain data indefinitely | Alembic, export, deletion, retention and recovery controls |
+| No independent security/privacy review | Health-related data needs stronger governance | Threat model, privacy notice and external assessment |
+| No older-adult usability or formal accessibility audit | Responsive UI does not prove accessibility | Field testing with older adults and assistive-tech users |
+| No clinical validation, EMR or pharmacy integration | App cannot verify a clinical plan | Clinician/pharmacist workflow review and authorized integrations |
+| No SMS, voice or push escalation | In-app reminders require app access | Optional, consented channels; never emergency claims |
+| Local chatbot is deterministic | It is a workflow guide, not a generative medical assistant | Test supported intents, safety boundaries and fallback paths |
 
 ## Roadmap
 
-**VIBEATHON prototype:** role permissions and revocation, medication events/check-ins, shared follow-ups, category-only Task Coach, synthetic-data demo.
+**Prototype:** patient roles/revocation, check-ins, tasks, reminder centre, no-key companion, visit brief, family handover and synthetic-data demo.
 
-**Before a public pilot:** durable database, migrations, backups, stronger authentication, privacy notice, consent/deletion/export, verified delivery channels, usability/accessibility tests, clinical workflow review and security assessment.
+**Pilot readiness:** durable hosting, database migrations/backups, privacy notice/consent, stronger authentication/recovery, export/deletion, dedicated reminder worker, monitoring, accessibility/usability study, security assessment and clinician workflow review.
 
-**Later:** user-confirmed refill tracking, multilingual/voice access, patient-approved appointment handoff, authorized provider integrations and opt-in escalation.
+**Commercial expansion:** recurring tasks, multilingual interface, vetted provider handoff, opt-in communication integrations and small-provider workspace. External health-data or AI processing needs separate legal, security and privacy design.
 
 ## Non-negotiable safety boundary
 
-MitraCare does not diagnose, prescribe, interpret prescriptions, calculate doses, check interactions, advise after missed doses, establish physical ingestion or dispatch emergency help. Use synthetic data only in public demos.
+MitraCare does not diagnose, prescribe, interpret prescriptions, calculate or recommend doses, check interactions, advise after a missed dose, verify physical ingestion or dispatch emergency help. A clinician-facing brief is a user-entered coordination summary for discussion—not a medical record or clinical assessment. Use synthetic data in this public prototype.
