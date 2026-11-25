@@ -4,7 +4,7 @@ from email.message import EmailMessage
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from .models import Profile, Member, Medication, Dose, Appointment, Audit, Notification
+from .models import Profile, Member, Medication, Dose, Appointment, CareTask, Audit, Notification
 
 log = logging.getLogger("mitracare")
 GRACE_MINUTES = 60
@@ -84,6 +84,29 @@ def process_reminders(db: Session, profile: Profile, now: datetime | None = None
         if timedelta(minutes=45) <= lead <= timedelta(hours=1, minutes=15):
             local_starts = starts.astimezone(profile_zone(profile))
             queue_notification(db, profile, f"appointment:1h:{appt.id}", "appointment", f"Appointment in about one hour: {appt.clinician}", f"Appointment at {local_starts.strftime('%a, %d %b %Y, %I:%M %p')} ({profile.timezone}). Location: {appt.location or 'Not specified'}.")
+    # Due-soon and overdue shared-task nudges are deduplicated by stable task ID.
+    open_tasks = db.query(CareTask).filter_by(profile_id=profile.id, status="open").all()
+    for care_task in open_tasks:
+        if not care_task.due_at:
+            continue
+        task_due = as_utc(care_task.due_at)
+        assignee = db.get(Member, care_task.assigned_to) if care_task.assigned_to else None
+        owner = assignee.name if assignee else "the care circle"
+        if timedelta(0) <= task_due - now <= timedelta(minutes=60):
+            queue_notification(
+                db, profile, f"care_task:due:{care_task.id}", "care_task_due",
+                f"Follow-up due soon: {care_task.title}",
+                f"The coordination follow-up '{care_task.title}' is due at "
+                f"{task_due.astimezone(profile_zone(profile)).strftime('%a, %d %b %I:%M %p')}. "
+                f"Assigned to: {owner}. Update it in Care Tasks.",
+            )
+        elif now >= task_due + timedelta(minutes=60):
+            queue_notification(
+                db, profile, f"care_task:overdue:{care_task.id}", "care_task_overdue",
+                f"Follow-up is overdue: {care_task.title}",
+                f"The coordination follow-up '{care_task.title}' is past its due time. "
+                f"Assigned to: {owner}. Review it in Care Tasks.",
+            )
     db.commit()
 
 def deliver_pending(db: Session):
