@@ -438,3 +438,19 @@ def test_family_member_cannot_generate_export_brief(client):
     assert joined.status_code == 200
     denied = c.post("/api/companion/brief", json={"kind":"handover","consent":True})
     assert denied.status_code == 403
+
+
+def test_companion_capabilities_follow_member_role(client):
+    c, _ = client
+    create_patient(c)
+    patient_caps = c.get("/api/companion/capabilities")
+    assert patient_caps.status_code == 200
+    assert patient_caps.json()["can_chat"] is True
+    assert patient_caps.json()["can_prepare_brief"] is True
+    inv = c.post("/api/invites", json={"name":"Family","role":"family"}).json()
+    c.post("/api/auth/logout")
+    c.post("/api/auth/join", json={"invite_code":inv["invite_code"],"name":"Family","pin":"445566"})
+    family_caps = c.get("/api/companion/capabilities")
+    assert family_caps.status_code == 200
+    assert family_caps.json()["can_chat"] is True
+    assert family_caps.json()["can_prepare_brief"] is False
