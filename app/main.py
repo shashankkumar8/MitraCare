@@ -477,3 +477,7 @@ async def reminder_worker(app):
         except Exception:
             logging.exception("Reminder worker iteration failed")
         await asyncio.sleep(60)
+
+
+from .companion import router as companion_router
+app.include_router(companion_router)
