@@ -88,6 +88,23 @@ class Appointment(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("members.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+class CareTask(Base):
+    __tablename__ = "care_tasks"
+    __table_args__ = (Index("ix_care_task_profile_status_due", "profile_id", "status", "due_at"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(String(300), default="")
+    category: Mapped[str] = mapped_column(String(24), default="other")
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    assigned_to: Mapped[int | None] = mapped_column(ForeignKey("members.id"), nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("members.id"))
+    completed_by: Mapped[int | None] = mapped_column(ForeignKey("members.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="open")
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Audit(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -10,7 +10,7 @@ class CreateProfile(BaseModel):
 
 class Login(BaseModel):
     profile_code: str = Field(min_length=6, max_length=12)
-    pin: str = Field(min_length=6, max_length=8)
+    pin: str = Field(min_length=6, max_length=8, pattern=r"^\d{6,8}$")
 
 class InviteCreate(BaseModel):
     name: str = Field(min_length=2, max_length=80)
@@ -38,7 +38,9 @@ class MedicationCreate(BaseModel):
         import re
         for v in values:
             if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", v): raise ValueError("Times must use 24-hour HH:MM format")
-        return sorted(set(values))
+        if len(values) != len(set(values)):
+            raise ValueError("Schedule times must be unique.")
+        return sorted(values)
     @field_validator("start_date", "end_date")
     @classmethod
     def valid_dates(cls, v):
@@ -56,3 +58,15 @@ class AppointmentCreate(BaseModel):
     location: str = Field(default="", max_length=140)
     starts_at: datetime
     notes: str = Field(default="", max_length=240)
+
+class CareTaskCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=300)
+    category: Literal["appointment", "transport", "supplies", "follow_up", "other"] = "other"
+    due_at: datetime | None = None
+    assigned_to: int | None = None
+
+
+class TaskCoachRequest(BaseModel):
+    category: Literal["appointment", "transport", "supplies", "follow_up", "other"]
+    consent: bool = False
