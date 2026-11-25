@@ -97,13 +97,20 @@ function mount(){
  '<div class="mitra-chat-privacy">This uses records available to your signed-in role. Chat text is not saved or sent to an AI provider. Not a doctor or emergency service.</div>'+
  '<div id="mitra-chat-messages" class="mitra-chat-messages" aria-live="polite"></div>'+
  '<div class="mitra-chat-shortcuts"><button type="button" data-prompt="What needs attention today?">Today’s priorities</button><button type="button" data-prompt="Show open follow-up tasks.">Open tasks</button><button type="button" data-prompt="When is the next appointment?">Next visit</button><button type="button" data-prompt="Who is in the care circle?">Care circle</button></div>'+
- '<div class="mitra-chat-brief-actions"><button type="button" data-brief="visit">Visit brief</button><button type="button" data-brief="handover">Family handover</button></div>'+
+ '<div id="mitra-chat-brief-actions" class="mitra-chat-brief-actions"><button type="button" data-brief="visit">Visit brief</button><button type="button" data-brief="handover">Family handover</button></div>'+
  '<label class="mitra-brief-consent"><input id="mitra-brief-consent" type="checkbox"><span>I confirm the patient has permitted this brief to be prepared and shared.</span></label>'+
  '<section id="mitra-brief-card" class="mitra-brief-card" hidden><div class="mitra-brief-head"><strong id="mitra-brief-title">Care brief</strong><span>Review before sharing</span></div><pre id="mitra-brief-preview"></pre><div class="mitra-brief-actions"><button type="button" data-brief-action="copy">Copy</button><button type="button" data-brief-action="download">Download .txt</button><button type="button" data-brief-action="print">Print</button></div></section>'+
  '<form id="mitra-chat-form" class="mitra-chat-form"><label class="visually-hidden" for="mitra-chat-input">Ask a care-coordination question</label><input id="mitra-chat-input" maxlength="600" autocomplete="off" placeholder="Ask about tasks, visits or reminders…" required><button id="mitra-chat-send" type="submit">Send</button></form>'+
  '<p class="mitra-chat-foot">For medicine decisions or symptoms, contact the clinician or pharmacist. For emergencies, contact local emergency services.</p></section>';
  document.body.appendChild(root);
  say("Hello! I’m Mitra, your local care-coordination companion. I can summarise tasks, appointments and care-circle roles, and prepare visit or family handover briefs. I work without an AI key and do not diagnose or make medication decisions.","assistant");
+ api("/api/companion/capabilities").then(caps=>{
+  if(!caps.can_prepare_brief){
+   $("#mitra-chat-brief-actions").hidden=true;
+   $("#mitra-brief-consent").closest("label").hidden=true;
+   say("Your family role is view-only. A patient or caregiver can prepare a visit brief or family handover after confirming the patient's permission.","assistant");
+  }
+ }).catch(()=>say("I couldn't load companion permissions. You can still use the basic care-coordination chat.","assistant"));
  root.addEventListener("click",e=>{
   const b=e.target.closest("button");if(!b||!root.contains(b))return;
   if(b.id==="mitra-chat-trigger"){$("#mitra-chat-panel").hidden=false;b.setAttribute("aria-expanded","true");$("#mitra-chat-input").focus();}
