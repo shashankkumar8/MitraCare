@@ -4,7 +4,8 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, Literal
+from pydantic import BaseModel, Field
+from typing import Literal
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 from .engine import as_utc
