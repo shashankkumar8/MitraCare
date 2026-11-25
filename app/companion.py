@@ -157,6 +157,8 @@ def companion_chat(data: ChatRequest, ctx=Depends(require_context), db: Session=
 @router.post("/api/companion/brief")
 def companion_brief(data: BriefRequest, ctx=Depends(require_context), db: Session=Depends(get_db)):
     member, profile = ctx
+    if member.role == "family":
+        raise HTTPException(403, "Ask the patient or a caregiver to prepare a care brief; family access is view-only.")
     if not data.consent:
         raise HTTPException(422, "Confirm that the patient has given permission to prepare this brief.")
     now = datetime.now(timezone.utc)
@@ -181,7 +183,13 @@ def companion_brief(data: BriefRequest, ctx=Depends(require_context), db: Sessio
     dose_rows = [{"medication":med_map.get(d.medication_id,"Medication schedule"),"status":d.status,
                   "scheduled_local":local(d.scheduled_at,profile),"recorded_by":by_id.get(d.action_by,"Not attributed"),
                   "recorded_at":local(d.action_at,profile) if d.action_at else ""} for d in doses]
-    counts = {s:sum(1 for d in doses if d.status==s) for s in ("taken","skipped","missed")}
+    counts = {
+        status: db.query(Dose).filter(
+            Dose.profile_id==profile.id, Dose.scheduled_at>=now-timedelta(days=14),
+            Dose.scheduled_at<=now, Dose.status==status
+        ).count()
+        for status in ("taken","skipped","missed")
+    }
     upcoming = db.query(Dose).filter(
         Dose.profile_id==profile.id,Dose.scheduled_at>=now,
         Dose.scheduled_at<=now+timedelta(days=7),Dose.status=="pending"
