@@ -393,23 +393,37 @@ async def task_coach(data: TaskCoachRequest, ctx=Depends(auth), db: DBSession = 
               "notice": "Starter checklist only. Review and adapt it; no personal or health information was used."}
     key = os.getenv("GEMINI_API_KEY")
     if key:
+        recent = db.query(Audit).filter(
+            Audit.profile_id == profile.id,
+            Audit.actor_id == member.id,
+            Audit.action == "task_coach_used",
+            Audit.created_at >= datetime.now(timezone.utc) - timedelta(hours=24),
+        ).count()
+        if recent >= 10:
+            raise HTTPException(429, "Task Coach is limited to 10 requests per member per 24 hours.")
         model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-        system = ("Create four concise, non-clinical household coordination checklist items. "
-                  "The only input is a fixed category enum. Do not mention medicines, diagnoses, "
-                  "treatment, symptoms, risk, health advice or emergencies. Return four numbered items only.")
+        prompt = (
+            "Create exactly four concise, non-clinical household coordination checklist items. "
+            "The only user input is a fixed category enum. Do not mention medicines, diagnoses, "
+            "treatment, symptoms, risk, health advice or emergencies. Return four numbered items only. "
+            "Category: " + data.category
+        )
         body = {
-            "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": "Category: " + data.category}]}],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 160},
+            "model": model,
+            "store": False,
+            "input": [{"type": "user_input", "content": prompt}],
         }
         try:
             async with httpx.AsyncClient(timeout=12.0) as client:
                 response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    "https://generativelanguage.googleapis.com/v1beta/interactions",
                     headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=body)
                 response.raise_for_status()
                 payload = response.json()
-            parts = payload.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            parts = [
+                part for step in payload.get("steps", []) if step.get("type") == "model_output"
+                for part in step.get("content", []) if part.get("type") == "text"
+            ]
             generated = "\n".join(str(part.get("text", "")) for part in parts if part.get("text"))
             items = [line.strip().lstrip("0123456789.-• ").strip() for line in generated.splitlines() if line.strip()]
             items = [item[:140] for item in items if item][:4]

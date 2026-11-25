@@ -25,9 +25,9 @@ MitraCare's prototype differentiation is the combination of patient-owned role-b
 
 ## AI boundary
 
-Task Coach helps break a non-clinical coordination category into a short checklist (transport, appointment preparation, supplies, general follow-up). It asks for explicit consent. If Gemini is configured, the server sends only the fixed category enum. It never sends task titles, free-text notes, profile code, member identity, email address, medication names, prescription details or health information. Output is generic and must be reviewed before becoming a shared task. If no server-side key exists or the provider is unavailable, local templates are returned and labelled as templates—not AI.
+Task Coach helps break a non-clinical coordination category into a short checklist (transport, appointment preparation, supplies, general follow-up). It asks for explicit consent. If Gemini is configured, the server sends only the fixed category enum to the Interactions API with `store: false`. It never sends task titles, free-text notes, profile code, member identity, email address, medication names, prescription details or health information. Output is generic and must be reviewed before becoming a shared task. If no server-side key exists or the provider is unavailable, local templates are returned and labelled as templates—not AI.
 
-The Gemini Developer API uses the generateContent REST endpoint and x-goog-api-key authentication. Keep the key in Render environment variables and set GEMINI_MODEL to one available for your project. The code default is gemini-3.8-flash; availability can vary by account/project.
+The Gemini Developer API uses the Interactions API endpoint and x-goog-api-key authentication. Keep the key in Render environment variables and set GEMINI_MODEL to one available for your project. The code default is gemini-3.8-flash; availability can vary by account/project.
 
 ## Current limitations and demerits
 
