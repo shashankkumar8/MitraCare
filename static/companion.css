@@ -1,0 +1,41 @@
+
+/* Mitra Companion */
+.visually-hidden{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+#mitra-companion{position:fixed;right:25px;bottom:22px;z-index:80;font-family:var(--body,Arial,sans-serif)}
+.mitra-chat-trigger{border:0;border-radius:999px;background:#254b36;color:#fff;display:flex;align-items:center;gap:10px;padding:9px 17px 9px 9px;box-shadow:0 12px 35px #183b283d;font-size:12px;font-weight:800;cursor:pointer}
+.mitra-chat-trigger:hover{transform:translateY(-2px)}
+.mitra-chat-orb{width:35px;height:35px;border-radius:50%;background:#dcebd7;color:#244c35;display:grid;place-items:center;font:800 20px var(--display,Georgia,serif)}
+.mitra-chat-panel{position:absolute;right:0;bottom:61px;width:min(400px,calc(100vw - 26px));height:min(690px,calc(100vh - 110px));background:#fff;border:1px solid #e3eae1;border-radius:20px;box-shadow:0 24px 80px #17271c35;display:flex;flex-direction:column;overflow:hidden}
+.mitra-chat-panel[hidden],.mitra-brief-card[hidden]{display:none}
+.mitra-chat-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px;background:#f5f8f2;border-bottom:1px solid #e8eee5}
+.mitra-chat-header>div{display:grid;gap:3px}.mitra-chat-header strong{font:700 18px var(--display,Georgia,serif);color:#2d4937}
+.mitra-chat-header small{font-size:10px;color:#79877b}.mitra-chat-eyebrow{font-size:8px;letter-spacing:1.1px;font-weight:800;color:#748675}
+.mitra-chat-close{border:0;border-radius:10px;width:32px;height:32px;background:#e8eee5;color:#4c6351;font-size:21px;cursor:pointer}
+.mitra-chat-privacy{font-size:9px;line-height:1.45;color:#6e7d70;padding:8px 13px;background:#fbfcf9;border-bottom:1px solid #edf0e9}
+.mitra-chat-messages{padding:13px 13px 4px;overflow:auto;flex:1;min-height:70px;display:flex;flex-direction:column;gap:11px}
+.mitra-message{display:grid;gap:4px;max-width:94%;align-self:flex-start}.mitra-message.is-user{align-self:flex-end}
+.mitra-message-label{font-size:9px;font-weight:800;color:#849185;padding:0 3px}.mitra-message.is-user .mitra-message-label{text-align:right}
+.mitra-message-bubble{font-size:11px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;padding:10px 12px;margin:0;border-radius:13px 13px 13px 4px;background:#f0f5ed;color:#465b4a}
+.mitra-message.is-user .mitra-message-bubble{background:#315b40;color:#fff;border-radius:13px 13px 4px 13px}
+.mitra-chat-shortcuts,.mitra-chat-brief-actions{display:flex;gap:6px;flex-wrap:wrap;padding:7px 12px}
+.mitra-chat-shortcuts button,.mitra-chat-brief-actions button{border:1px solid #e2e9de;background:#fff;color:#516652;border-radius:999px;padding:7px 9px;font-size:9px;font-weight:700;cursor:pointer}
+.mitra-chat-shortcuts button:hover,.mitra-chat-brief-actions button:hover{background:#f0f5ed}
+.mitra-chat-brief-actions{padding-top:0}.mitra-chat-brief-actions button{background:#eef4eb;border-color:#dae7d6}
+.mitra-brief-consent{display:flex;align-items:flex-start;gap:8px;padding:8px 12px;font-size:9px;line-height:1.4;color:#657567}
+.mitra-brief-consent input{margin:1px 0 0;flex-shrink:0}
+.mitra-chat-form{display:flex;gap:7px;padding:10px 12px;border-top:1px solid #e9eee6;background:#fff}
+.mitra-chat-form input{min-width:0;flex:1;border:1px solid #dfe7dc;border-radius:10px;padding:11px 12px;font:inherit;font-size:11px;outline:none}
+.mitra-chat-form input:focus{border-color:#769678;box-shadow:0 0 0 3px #789b7921}
+.mitra-chat-form button,.mitra-brief-actions button{border:0;border-radius:10px;background:#2d563b;color:white;padding:0 13px;font-size:10px;font-weight:800;cursor:pointer}
+.mitra-chat-form button:disabled,.mitra-chat-form input:disabled{opacity:.55;cursor:wait}
+.mitra-chat-foot{margin:0;padding:8px 12px 10px;background:#fbfcfa;color:#8b968a;font-size:8px;line-height:1.45}
+.mitra-brief-card{margin:5px 12px 9px;border:1px solid #e4ebe0;border-radius:12px;overflow:hidden;min-height:0;max-height:220px;display:flex;flex-direction:column}
+.mitra-brief-head{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 10px;background:#f4f7f1}
+.mitra-brief-head strong{font-size:10px;color:#435a48}.mitra-brief-head span{font-size:8px;color:#8b978c}
+.mitra-brief-card pre{margin:0;padding:10px;font:9px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:#566559;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+.mitra-brief-actions{display:flex;gap:6px;padding:8px;border-top:1px solid #edf0e9}.mitra-brief-actions button{padding:7px 9px}
+#mitra-companion-print-sheet{display:none}
+@media(max-width:800px){#mitra-companion{right:13px;bottom:82px}.mitra-chat-panel{bottom:60px;height:min(650px,calc(100vh - 165px))}}
+@media(max-width:420px){.mitra-chat-panel{right:-3px;width:calc(100vw - 24px)}.mitra-chat-shortcuts button{font-size:8px;padding:7px 8px}}
+@media(prefers-reduced-motion:reduce){.mitra-chat-trigger{transition:none}}
+@media print{body>*:not(#mitra-companion-print-sheet){display:none!important}#mitra-companion-print-sheet{display:block!important;position:static!important;width:100%;padding:0!important;margin:0!important;color:#111!important;background:#fff!important}#mitra-companion-print-sheet h1{font:700 18pt Arial,sans-serif;margin:0 0 10pt}#mitra-companion-print-sheet pre{white-space:pre-wrap;overflow-wrap:anywhere;font:9pt/1.45 Arial,sans-serif;color:#111}}
