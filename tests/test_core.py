@@ -424,3 +424,17 @@ def test_shared_task_due_and_overdue_reminders_are_deduplicated():
     assert db.query(Notification).filter_by(kind="care_task_due",recipient="").count()==1
     assert db.query(Notification).filter_by(kind="care_task_overdue",recipient="").count()==1
     db.close();Base.metadata.drop_all(engine);engine.dispose()
+
+
+def test_family_member_cannot_generate_export_brief(client):
+    c, _ = client
+    code = create_patient(c)
+    invite = c.post("/api/invites", json={"name":"Family","role":"family"})
+    assert invite.status_code == 201
+    c.post("/api/auth/logout")
+    joined = c.post("/api/auth/join", json={
+        "invite_code":invite.json()["invite_code"],"name":"Family","pin":"445566"
+    })
+    assert joined.status_code == 200
+    denied = c.post("/api/companion/brief", json={"kind":"handover","consent":True})
+    assert denied.status_code == 403
