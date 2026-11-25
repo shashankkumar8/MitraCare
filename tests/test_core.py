@@ -349,3 +349,78 @@ def test_postgres_url_normalizes_to_installed_psycopg3_driver():
         engine, _ = make_database(raw_url)
         assert engine.url.drivername == "postgresql+psycopg"
         engine.dispose()
+
+
+def test_companion_chat_is_local_and_does_not_store_message_text(monkeypatch, client):
+    from app.models import Audit
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    c, SessionLocal = client
+    create_patient(c)
+    c.post("/api/tasks", json={"title":"Arrange clinic transport","category":"transport"})
+    response = c.post("/api/companion/chat", json={"message":"What needs attention today? Private code 918273"})
+    assert response.status_code == 200, response.text
+    assert response.json()["mode"] == "local_rules"
+    assert response.json()["stored"] is False
+    assert "Arrange clinic transport" in response.json()["reply"]
+    with SessionLocal() as db:
+        row = db.query(Audit).filter_by(action="care_companion_chat").one()
+        assert "message content not stored" in row.detail
+        assert "918273" not in row.detail
+
+
+def test_companion_refuses_medication_decisions_and_emergency_triage(client):
+    c, _ = client
+    create_patient(c)
+    dose = c.post("/api/companion/chat", json={"message":"Should I double my dose after a missed dose?"})
+    assert dose.status_code == 200
+    assert "clinician or pharmacist" in dose.json()["reply"]
+    assert "repeat" in dose.json()["reply"]
+    emergency = c.post("/api/companion/chat", json={"message":"This is an emergency, chest pain"})
+    assert emergency.status_code == 200
+    assert "local emergency" in emergency.json()["reply"]
+
+
+def test_companion_visit_brief_requires_consent_and_contains_user_entered_schedule(client):
+    c, _ = client
+    create_patient(c)
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
+    created = c.post("/api/medications", json={
+        "name":"Example tablet", "strength":"10 mg", "instructions":"Entered from current label",
+        "times":["23:59"], "start_date":today,
+    })
+    assert created.status_code == 201, created.text
+    refused = c.post("/api/companion/brief", json={"kind":"visit","consent":False})
+    assert refused.status_code == 422
+    result = c.post("/api/companion/brief", json={"kind":"visit","consent":True})
+    assert result.status_code == 200, result.text
+    assert result.json()["medications"][0]["name"] == "Example tablet"
+    assert "not a medical record or clinical assessment" in result.json()["data_note"]
+
+
+def test_companion_endpoints_require_login(client):
+    c, _ = client
+    assert c.post("/api/companion/chat", json={"message":"help"}).status_code == 401
+    assert c.post("/api/companion/brief", json={"kind":"visit","consent":True}).status_code == 401
+
+
+def test_shared_task_due_and_overdue_reminders_are_deduplicated():
+    from app.models import CareTask
+    engine = create_engine("sqlite://", connect_args={"check_same_thread":False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    S = sessionmaker(bind=engine, expire_on_commit=False)
+    db = S()
+    now = datetime(2026, 11, 25, 10, 0, tzinfo=timezone.utc)
+    profile = Profile(code="MTRULE06", name="Patient", timezone="UTC")
+    db.add(profile); db.flush()
+    member = Member(profile_id=profile.id, name="Patient", email="", role="patient", pin_hash=hash_secret("123456"))
+    db.add(member); db.flush()
+    due = CareTask(profile_id=profile.id,title="Arrange transport",category="transport",
+                   due_at=now+timedelta(minutes=30),assigned_to=member.id,created_by=member.id,status="open")
+    late = CareTask(profile_id=profile.id,title="Prepare visit papers",category="appointment",
+                    due_at=now-timedelta(hours=2),assigned_to=member.id,created_by=member.id,status="open")
+    db.add_all([due,late]); db.commit()
+    process_reminders(db,profile,now)
+    process_reminders(db,profile,now+timedelta(minutes=1))
+    assert db.query(Notification).filter_by(kind="care_task_due",recipient="").count()==1
+    assert db.query(Notification).filter_by(kind="care_task_overdue",recipient="").count()==1
+    db.close();Base.metadata.drop_all(engine);engine.dispose()
