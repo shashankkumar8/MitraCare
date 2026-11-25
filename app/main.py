@@ -4,14 +4,15 @@ from contextlib import asynccontextmanager
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
+import httpx
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session as DBSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import desc
 from .database import Base, make_database
-from .models import Profile, Member, Session as LoginSession, AuthAttempt, Invite, Medication, Dose, Appointment, Audit, Notification
-from .schemas import CreateProfile, Login, InviteCreate, JoinInvite, MedicationCreate, DoseAction, AppointmentCreate
+from .models import Profile, Member, Session as LoginSession, AuthAttempt, Invite, Medication, Dose, Appointment, CareTask, Audit, Notification
+from .schemas import CreateProfile, Login, InviteCreate, JoinInvite, MedicationCreate, DoseAction, AppointmentCreate, CareTaskCreate, TaskCoachRequest
 from .security import COOKIE, hash_secret, verify_secret, token_digest, create_session, current_member, require_write, pin_valid
 from .engine import audit, materialize_doses, process_reminders, deliver_pending, as_utc, care_insights
 
@@ -227,7 +228,7 @@ def dashboard(ctx=Depends(auth), db: DBSession = Depends(get_db)):
     upcoming_appts = db.query(Appointment).filter(Appointment.profile_id == profile.id, Appointment.starts_at >= now-timedelta(hours=2)).order_by(Appointment.starts_at).limit(8).all()
     appt_rows = [{"id": a.id, "clinician": a.clinician, "location": a.location, "starts_at": as_utc(a.starts_at).isoformat(), "local_time": as_utc(a.starts_at).astimezone(zone).strftime("%a, %d %b · %I:%M %p"), "local_day": as_utc(a.starts_at).astimezone(zone).strftime("%d"), "local_month": as_utc(a.starts_at).astimezone(zone).strftime("%b"), "notes": a.notes} for a in upcoming_appts]
     missed = sum(d.status == "missed" for d in recent)
-    pending_alerts = db.query(Notification).filter_by(profile_id=profile.id).order_by(desc(Notification.created_at)).limit(12).all()
+    pending_alerts = db.query(Notification).filter_by(profile_id=profile.id, recipient="").order_by(desc(Notification.created_at)).limit(12).all()
     email_count = db.query(Member).filter(Member.profile_id == profile.id, Member.active == True, Member.email != "").count()
     email_ready = bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_USER") and os.getenv("SMTP_PASSWORD") and email_count > 0)
     return {"profile": profile.name, "timezone": profile.timezone, "adherence_7d": adherence, "taken_7d": taken, "recorded_7d": total, "missed_7d": missed, "doses": dose_rows, "appointments": appt_rows, "notifications": [notification_json(n) for n in pending_alerts], "email_configured": email_ready, "email_recipients": email_count, "role": member.role}
@@ -260,6 +261,170 @@ def appointments(ctx=Depends(auth), db: DBSession = Depends(get_db)):
     zone = ZoneInfo(profile.timezone)
     return [{"id": a.id, "clinician": a.clinician, "location": a.location, "starts_at": as_utc(a.starts_at).isoformat(), "local_time": as_utc(a.starts_at).astimezone(zone).strftime("%a, %d %b · %I:%M %p"), "local_day": as_utc(a.starts_at).astimezone(zone).strftime("%d"), "local_month": as_utc(a.starts_at).astimezone(zone).strftime("%b"), "notes": a.notes} for a in db.query(Appointment).filter_by(profile_id=profile.id).order_by(Appointment.starts_at).all()]
 
+
+def task_json(task: CareTask, people: dict[int, Member], profile: Profile):
+    zone = ZoneInfo(profile.timezone)
+    due = as_utc(task.due_at) if task.due_at else None
+    completed = as_utc(task.completed_at) if task.completed_at else None
+    assignee = people.get(task.assigned_to) if task.assigned_to else None
+    actor = people.get(task.completed_by) if task.completed_by else None
+    return {
+        "id": task.id, "title": task.title, "description": task.description,
+        "category": task.category, "status": task.status, "assigned_to": task.assigned_to,
+        "assignee_name": assignee.name if assignee else "", "created_by": task.created_by,
+        "completed_by": task.completed_by, "completed_by_name": actor.name if actor else "",
+        "due_at": due.isoformat() if due else None,
+        "due_local": due.astimezone(zone).strftime("%a, %d %b · %I:%M %p") if due else "",
+        "completed_at": completed.isoformat() if completed else None,
+        "created_at": as_utc(task.created_at).isoformat(),
+    }
+
+
+@app.get("/api/tasks")
+def list_tasks(ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    rows = db.query(CareTask).filter_by(profile_id=profile.id).order_by(CareTask.status, CareTask.due_at, CareTask.id.desc()).limit(100).all()
+    people = {m.id: m for m in db.query(Member).filter_by(profile_id=profile.id).all()}
+    return [task_json(row, people, profile) for row in rows]
+
+
+@app.post("/api/tasks", status_code=201)
+def create_task(data: CareTaskCreate, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    require_write(member)
+    assignee = None
+    if data.assigned_to is not None:
+        assignee = db.query(Member).filter_by(id=data.assigned_to, profile_id=profile.id, active=True).first()
+        if not assignee or assignee.role == "family":
+            raise HTTPException(422, "Choose an active patient or caregiver in this care circle.")
+    due = data.due_at
+    if due is not None:
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=ZoneInfo(profile.timezone))
+        due = due.astimezone(timezone.utc)
+    task = CareTask(profile_id=profile.id, title=data.title.strip(), description=data.description.strip(),
+                    category=data.category, due_at=due, assigned_to=assignee.id if assignee else None,
+                    created_by=member.id, status="open")
+    db.add(task)
+    db.flush()
+    audit(db, profile.id, member.id, "care_task_created", f"Created care follow-up: {task.title}")
+    db.commit()
+    db.refresh(task)
+    people = {m.id: m for m in db.query(Member).filter_by(profile_id=profile.id).all()}
+    return task_json(task, people, profile)
+
+
+@app.post("/api/tasks/{task_id}/complete")
+def complete_task(task_id: int, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    require_write(member)
+    task = db.query(CareTask).filter_by(id=task_id, profile_id=profile.id).first()
+    if not task:
+        raise HTTPException(404, "Care task not found.")
+    if task.status != "open":
+        raise HTTPException(409, "This follow-up is already completed.")
+    task.status = "completed"
+    task.completed_by = member.id
+    task.completed_at = datetime.now(timezone.utc)
+    audit(db, profile.id, member.id, "care_task_completed", f"Completed care follow-up: {task.title}")
+    db.commit()
+    people = {m.id: m for m in db.query(Member).filter_by(profile_id=profile.id).all()}
+    return task_json(task, people, profile)
+
+
+@app.post("/api/tasks/{task_id}/reopen")
+def reopen_task(task_id: int, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    require_write(member)
+    task = db.query(CareTask).filter_by(id=task_id, profile_id=profile.id).first()
+    if not task:
+        raise HTTPException(404, "Care task not found.")
+    if task.status != "completed":
+        raise HTTPException(409, "Only a completed follow-up can be reopened.")
+    task.status = "open"
+    task.completed_by = None
+    task.completed_at = None
+    audit(db, profile.id, member.id, "care_task_reopened", f"Reopened care follow-up: {task.title}")
+    db.commit()
+    people = {m.id: m for m in db.query(Member).filter_by(profile_id=profile.id).all()}
+    return task_json(task, people, profile)
+
+
+@app.delete("/api/members/{member_id}")
+def revoke_member_access(member_id: int, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    if member.role != "patient":
+        raise HTTPException(403, "Only the patient can revoke care-circle access.")
+    target = db.query(Member).filter_by(id=member_id, profile_id=profile.id, active=True).first()
+    if not target or target.role == "patient" or target.id == member.id:
+        raise HTTPException(404, "Care-circle member not found or cannot be removed.")
+    target.active = False
+    db.query(LoginSession).filter_by(member_id=target.id).delete(synchronize_session=False)
+    audit(db, profile.id, member.id, "member_access_revoked", f"Revoked {target.role} access for {target.name}")
+    db.commit()
+    return {"ok": True, "message": f"Access revoked for {target.name}."}
+
+
+@app.get("/api/task-coach")
+def task_coach_config(ctx=Depends(auth)):
+    member, profile = ctx
+    return {
+        "ai_available": bool(os.getenv("GEMINI_API_KEY")),
+        "provider": "Google Gemini" if os.getenv("GEMINI_API_KEY") else None,
+        "categories": ["appointment", "transport", "supplies", "follow_up", "other"],
+        "privacy": "Only a fixed category label is sent to the optional AI provider. No profile, task title, notes, identity, medication or health details are transmitted.",
+    }
+
+
+@app.post("/api/task-coach")
+async def task_coach(data: TaskCoachRequest, ctx=Depends(auth), db: DBSession = Depends(get_db)):
+    member, profile = ctx
+    require_write(member)
+    if not data.consent:
+        raise HTTPException(422, "Confirm consent before requesting a checklist.")
+    templates = {
+        "appointment": ["Confirm date, time and venue", "Check what documents or records to bring", "Arrange transport and an arrival contact", "Write down questions to discuss with the professional"],
+        "transport": ["Confirm pickup time and address", "Agree who will accompany the person", "Check return-trip arrangements", "Share the plan with invited care-circle members"],
+        "supplies": ["Check the item and quantity needed", "Confirm who will collect or order it", "Agree a completion date", "Tell the care circle when it is ready"],
+        "follow_up": ["Confirm the person responsible", "Agree the next contact date", "Record the agreed outcome", "Share an update with the care circle"],
+        "other": ["Write the next action clearly", "Assign one responsible person", "Choose a realistic due time", "Share completion status with the care circle"],
+    }
+    result = {"mode": "template", "provider": None, "items": templates[data.category],
+              "notice": "Starter checklist only. Review and adapt it; no personal or health information was used."}
+    key = os.getenv("GEMINI_API_KEY")
+    if key:
+        model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+        system = ("Create four concise, non-clinical household coordination checklist items. "
+                  "The only input is a fixed category enum. Do not mention medicines, diagnoses, "
+                  "treatment, symptoms, risk, health advice or emergencies. Return four numbered items only.")
+        body = {
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": "Category: " + data.category}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 160},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                response = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=body)
+                response.raise_for_status()
+                payload = response.json()
+            parts = payload.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            generated = "\n".join(str(part.get("text", "")) for part in parts if part.get("text"))
+            items = [line.strip().lstrip("0123456789.-• ").strip() for line in generated.splitlines() if line.strip()]
+            items = [item[:140] for item in items if item][:4]
+            blocked = ("medicine", "medication", "dose", "diagnos", "treatment", "symptom", "prescrib", "emergency", "clinical")
+            if len(items) == 4 and not any(word in " ".join(items).lower() for word in blocked):
+                result = {"mode": "gemini", "provider": "Google Gemini", "model": model, "items": items,
+                          "notice": "AI-generated generic coordination suggestions. Review before using; no personal or health details were sent."}
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
+            result["mode"] = "template_fallback"
+            result["notice"] = "The AI service was unavailable. Generic starter suggestions are shown instead."
+    audit(db, profile.id, member.id, "task_coach_used", f"Used non-clinical task checklist for category: {data.category}")
+    db.commit()
+    return result
+
+
 def notification_json(n):
     return {"id": n.id, "kind": n.kind, "subject": n.subject, "body": n.body, "status": n.status, "created_at": as_utc(n.created_at).isoformat()}
 
@@ -271,7 +436,7 @@ def insights(ctx=Depends(auth), db: DBSession = Depends(get_db)):
 @app.get("/api/notifications")
 def notifications(ctx=Depends(auth), db: DBSession = Depends(get_db)):
     member, profile = ctx
-    return [notification_json(n) for n in db.query(Notification).filter_by(profile_id=profile.id).order_by(desc(Notification.created_at)).limit(50).all()]
+    return [notification_json(n) for n in db.query(Notification).filter_by(profile_id=profile.id, recipient="").order_by(desc(Notification.created_at)).limit(50).all()]
 
 @app.get("/api/activity")
 def activity(ctx=Depends(auth), db: DBSession = Depends(get_db)):
