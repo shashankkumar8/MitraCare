@@ -310,7 +310,7 @@ pytest -q
 node --check static/app.js
 ~~~
 
-The current suite contains **24 tests** covering:
+The current suite contains **25 tests** covering:
 
 - Profile creation, login, logout, invalid PINs and timezone validation.
 - Login lockout and single-use invitation expiry/replay protection.
@@ -322,7 +322,7 @@ The current suite contains **24 tests** covering:
 - Appointment validation.
 - CareLoop Insight minimum-sample behavior.
 - SMTP retry and dead-letter behavior using a mocked mail server.
-- PostgreSQL URL normalization to the installed psycopg 3 driver.\n- Reminder fan-out idempotency and in-app fallback when members have email addresses.\n- Shared-task assignment, completion attribution and family read-only access.\n- Patient-controlled member revocation and session invalidation.\n- Task Coach consent and category-only local fallback.\n- Digit-only login PIN validation and duplicate schedule-time rejection.
+- PostgreSQL URL normalization to the installed psycopg 3 driver.\n- Reminder fan-out idempotency and in-app fallback when members have email addresses.\n- Shared-task assignment, completion attribution and family read-only access.\n- Patient-controlled member revocation and session invalidation.\n- Task Coach consent, category-only local fallback and mocked Gemini Interactions API request with `store: false`.\n- Digit-only login PIN validation and duplicate schedule-time rejection.
 - Frontend entry point and static asset delivery.
 
 GitHub Actions runs pytest and the JavaScript syntax check on pushes and pull requests. Automated tests validate software behavior with synthetic fixtures; they are not clinical trials, field testing or proof of email deliverability.

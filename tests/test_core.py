@@ -301,6 +301,44 @@ def test_duplicate_medication_times_are_rejected(client):
     assert c.post("/api/medications", json=payload).status_code == 422
 
 
+def test_task_coach_uses_gemini_interactions_without_storing_category_only(monkeypatch, client):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.8-flash")
+    c, _ = client; create_patient(c)
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"status":"completed","steps":[
+                {"type":"model_output","content":[{"type":"text","text":"1. Confirm pickup time\n2. Agree on a companion\n3. Check the return plan\n4. Share the agreed schedule"}]}
+            ]}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout):
+            captured["timeout"] = timeout
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+        async def post(self, url, headers, json):
+            captured.update({"url":url,"headers":headers,"body":json})
+            return FakeResponse()
+
+    monkeypatch.setattr("app.main.httpx.AsyncClient", FakeAsyncClient)
+    result = c.post("/api/task-coach", json={"category":"transport","consent":True})
+    assert result.status_code == 200, result.text
+    assert result.json()["mode"] == "gemini"
+    assert len(result.json()["items"]) == 4
+    assert captured["url"] == "https://generativelanguage.googleapis.com/v1beta/interactions"
+    assert captured["body"]["store"] is False
+    user_input = captured["body"]["input"][0]["content"]
+    assert "Category: transport" in user_input
+    assert "Meera" not in user_input and "Example tablet" not in user_input
+    assert captured["headers"]["x-goog-api-key"] == "test-key-not-real"
+
+
 def test_postgres_url_normalizes_to_installed_psycopg3_driver():
     from app.database import make_database
 
