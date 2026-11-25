@@ -450,3 +450,12 @@ MitraCare/
 ## AI VIBEATHON positioning
 
 MitraCare is a patient-controlled home-care coordination workflow—not the first medication reminder app, a clinical AI assistant or a hardware dispenser. Its AI-enabled component is deliberately narrow: generic task planning from a fixed category. See PRODUCT_STRATEGY.md for competitor analysis and VIBEATHON_SUBMISSION.md for the judge pitch and walkthrough.
+
+
+## Mitra Companion and continuity packs
+
+A floating **Ask Mitra** companion is available after sign-in. It is a private, deterministic care-coordination guide that works without Gemini or an API key. It uses records available to the signed-in role, does not save chat message text, and cannot diagnose or make medication decisions.
+
+It supports task, appointment, care-circle and reminder questions, plus patient-permission-acknowledged **Clinician Visit Brief** and **Family Care Handover** packs. Review each pack before sharing. The patient or caregiver can create a pack; family remains view-only. Copy, download and print are performed locally in the browser. See [COMPANION_GUIDE.md](COMPANION_GUIDE.md).
+
+Care Tasks with due times also create deduplicated in-app due-soon and overdue notifications. This is a coordination reminder, not an emergency alert. Actual email delivery still depends on verified SMTP configuration.
